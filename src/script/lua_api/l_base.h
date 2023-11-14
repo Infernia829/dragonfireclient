@@ -32,7 +32,6 @@ extern "C" {
 
 #ifndef SERVER
 class Client;
-class Game;
 class GUIEngine;
 #endif
 
@@ -48,11 +47,11 @@ public:
 	static ServerInventoryManager *getServerInventoryMgr(lua_State *L);
 	#ifndef SERVER
 	static Client*          getClient(lua_State *L);
-	static Game*        	getGame(lua_State *L);
 	static GUIEngine*       getGuiEngine(lua_State *L);
 	#endif // !SERVER
 
 	static IGameDef*        getGameDef(lua_State *L);
+
 	static Environment*     getEnv(lua_State *L);
 
 	// When we are not loading the mod, this function returns "."
@@ -74,6 +73,16 @@ public:
 			const char* name,
 			lua_CFunction func,
 			int top);
+
+	static void registerClass(lua_State *L, const char *name,
+			const luaL_Reg *methods,
+			const luaL_Reg *metamethods);
+
+	template<typename T>
+	static inline T *checkObject(lua_State *L, int narg)
+	{
+		return *reinterpret_cast<T**>(luaL_checkudata(L, narg, T::className));
+	}
 
 	/**
 	 * A wrapper for deprecated functions.

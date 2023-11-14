@@ -170,6 +170,9 @@ end
 --------------------------------------------------------------------------------
 function string.split(str, delim, include_empty, max_splits, sep_is_pattern)
 	delim = delim or ","
+	if delim == "" then
+		error("string.split separator is empty", 2)
+	end
 	max_splits = max_splits or -2
 	local items = {}
 	local pos, len = 1, #str
@@ -250,11 +253,12 @@ local formspec_escapes = {
 	["["] = "\\[",
 	["]"] = "\\]",
 	[";"] = "\\;",
-	[","] = "\\,"
+	[","] = "\\,",
+	["$"] = "\\$",
 }
 function core.formspec_escape(text)
 	-- Use explicit character set instead of dot here because it doubles the performance
-	return text and string.gsub(text, "[\\%[%];,]", formspec_escapes)
+	return text and string.gsub(text, "[\\%[%];,$]", formspec_escapes)
 end
 
 
@@ -516,32 +520,9 @@ function table.shuffle(t, from, to, random)
 end
 
 
-function table.combine(t, other)
-	other = other or {}
-	for k, v in pairs(other) do
-		if type(v) == "table" and type(t[k]) == "table" then
-			table.combine(t[k], v)
-		else
-			t[k] = v
-		end
-	end
-end
-
 --------------------------------------------------------------------------------
 -- mainmenu only functions
 --------------------------------------------------------------------------------
-if INIT == "mainmenu" then
-	function core.get_game(index)
-		local games = core.get_games()
-
-		if index > 0 and index <= #games then
-			return games[index]
-		end
-
-		return nil
-	end
-end
-
 if core.gettext then -- for client and mainmenu
 	function fgettext_ne(text, ...)
 		text = core.gettext(text)
@@ -594,66 +575,6 @@ function core.colorize(color, message)
 	return table.concat(lines, "\n") .. core.get_color_escape_sequence("#ffffff")
 end
 
-local function rgb_to_hex(rgb)
-	local hexadecimal = "#"
-
-	for key, value in pairs(rgb) do
-		local hex = ""
-
-		while(value > 0)do
-			local index = math.fmod(value, 16) + 1
-			value = math.floor(value / 16)
-			hex = string.sub("0123456789ABCDEF", index, index) .. hex
-		end
-
-		if(string.len(hex) == 0)then
-			hex = "00"
-		elseif(string.len(hex) == 1)then
-			hex = "0" .. hex
-		end
-
-		hexadecimal = hexadecimal .. hex
-	end
-
-	return hexadecimal
-end
-
-local function color_from_hue(hue)
-	local h = hue / 60
-	local c = 255
-	local x = (1 - math.abs(h % 2 - 1)) * 255
-
-	local i = math.floor(h)
-	if i == 0 then
-		return rgb_to_hex({c, x, 0})
-	elseif i == 1 then
-		return rgb_to_hex({x, c, 0})
-	elseif i == 2 then
-		return rgb_to_hex({0, c, x})
-	elseif i == 3 then
-		return rgb_to_hex({0, x, c})
-	elseif i == 4 then
-		return rgb_to_hex({x, 0, c})
-	else
-		return rgb_to_hex({c, 0, x})
-	end
-end
-
-function core.rainbow(input)
-	local step = 360 / input:len()
-	local hue = 0
-	local output = ""
-	for i = 1, input:len() do
-		local char = input:sub(i, i)
-		if char:match("%s") then
-			output = output .. char
-		else
-			output = output  .. core.get_color_escape_sequence(color_from_hue(hue)) .. char
-		end
-		hue = hue + step
-	end
-	return output
-end
 
 function core.strip_foreground_colors(str)
 	return (str:gsub(ESCAPE_CHAR .. "%(c@[^)]+%)", ""))
@@ -705,19 +626,6 @@ end
 
 function core.get_translator(textdomain)
 	return function(str, ...) return core.translate(textdomain or "", str, ...) end
-end
-
-function core.get_pointed_thing_position(pointed_thing, above)
-	if pointed_thing.type == "node" then
-		if above then
-			-- The position where a node would be placed
-			return pointed_thing.above
-		end
-		-- The position where a node would be dug
-		return pointed_thing.under
-	elseif pointed_thing.type == "object" then
-		return pointed_thing.ref and pointed_thing.ref:get_pos()
-	end
 end
 
 --------------------------------------------------------------------------------
@@ -851,13 +759,4 @@ function core.parse_coordinates(x, y, z, relative_to)
 	local ry = core.parse_relative_number(y, relative_to.y)
 	local rz = core.parse_relative_number(z, relative_to.z)
 	return rx and ry and rz and { x = rx, y = ry, z = rz }
-end
-
-function core.inventorycube(img1, img2, img3)
-	img2 = img2 or img1
-	img3 = img3 or img1
-	return "[inventorycube"
-			.. "{" .. img1:gsub("%^", "&")
-			.. "{" .. img2:gsub("%^", "&")
-			.. "{" .. img3:gsub("%^", "&")
 end

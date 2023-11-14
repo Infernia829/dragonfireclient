@@ -23,7 +23,38 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "serverenvironment.h"
 #include "raycast.h"
 
-class ModApiEnvMod : public ModApiBase {
+// base class containing helpers
+class ModApiEnvBase : public ModApiBase {
+protected:
+
+	static void collectNodeIds(lua_State *L, int idx,
+		const NodeDefManager *ndef, std::vector<content_t> &filter);
+
+	static void checkArea(v3s16 &minp, v3s16 &maxp);
+
+	// F must be (v3s16 pos) -> MapNode
+	template <typename F>
+	static int findNodeNear(lua_State *L, v3s16 pos, int radius,
+		const std::vector<content_t> &filter, int start_radius, F &&getNode);
+
+	// F must be (G callback) -> void
+	// with G being (v3s16 p, MapNode n) -> bool
+	// and behave like Map::forEachNodeInArea
+	template <typename F>
+	static int findNodesInArea(lua_State *L,  const NodeDefManager *ndef,
+		const std::vector<content_t> &filter, bool grouped, F &&iterate);
+
+	// F must be (v3s16 pos) -> MapNode
+	template <typename F>
+	static int findNodesInAreaUnderAir(lua_State *L, v3s16 minp, v3s16 maxp,
+		const std::vector<content_t> &filter, F &&getNode);
+
+	static const EnumString es_ClearObjectsMode[];
+	static const EnumString es_BlockStatusType[];
+
+};
+
+class ModApiEnv : public ModApiEnvBase {
 private:
 	// set_node(pos, node)
 	// pos = {x=num, y=num, z=num}
@@ -134,18 +165,6 @@ private:
 	// find_node_near(pos, radius, nodenames, search_center) -> pos or nil
 	// nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
 	static int l_find_node_near(lua_State *L);
-	
-	// find_nodes_near(pos, radius, nodenames, search_center) -> list of positions
-	// nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
-	static int l_find_nodes_near(lua_State *L);
-	
-	// find_nodes_near_under_air(pos, radius, nodenames, search_center) -> list of positions
-	// nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
-	static int l_find_nodes_near_under_air(lua_State *L);
-	
-	// find_nodes_near_under_air(pos, radius, nodenames, search_center) -> list of positions
-	// nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
-	static int l_find_nodes_near_under_air_except(lua_State *L);
 
 	// find_nodes_in_area(minp, maxp, nodenames) -> list of positions
 	// nodenames: eg. {"ignore", "group:tree"} or "default:dirt"
@@ -210,20 +229,12 @@ private:
 	// compare_block_status(nodepos)
 	static int l_compare_block_status(lua_State *L);
 
-	// Get a string translated server side
+	// get_translated_string(lang_code, string)
 	static int l_get_translated_string(lua_State * L);
-
-	/* Helpers */
-
-	static void collectNodeIds(lua_State *L, int idx,
-		const NodeDefManager *ndef, std::vector<content_t> &filter);
 
 public:
 	static void Initialize(lua_State *L, int top);
 	static void InitializeClient(lua_State *L, int top);
-
-	static const EnumString es_ClearObjectsMode[];
-	static const EnumString es_BlockStatusType[];
 };
 
 class LuaABM : public ActiveBlockModifier {
@@ -299,14 +310,13 @@ public:
 		this->trigger_contents = trigger_contents;
 		this->name = name;
 	}
-	virtual void trigger(ServerEnvironment *env, v3s16 p, MapNode n);
+	virtual void trigger(ServerEnvironment *env, v3s16 p, MapNode n, float dtime_s);
 };
 
 //! Lua wrapper for RaycastState objects
 class LuaRaycast : public ModApiBase
 {
 private:
-	static const char className[];
 	static const luaL_Reg methods[];
 	//! Inner state
 	RaycastState state;
@@ -333,14 +343,10 @@ public:
 	//! Creates a LuaRaycast and leaves it on top of the stack.
 	static int create_object(lua_State *L);
 
-	/*!
-	 * Returns the Raycast from the stack or throws an error.
-	 * @param narg location of the RaycastState in the stack
-	 */
-	static LuaRaycast *checkobject(lua_State *L, int narg);
-
 	//! Registers Raycast as a Lua userdata type.
 	static void Register(lua_State *L);
+
+	static const char className[];
 };
 
 struct ScriptCallbackState {

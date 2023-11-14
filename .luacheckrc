@@ -19,7 +19,7 @@ read_globals = {
 	"Settings",
 
 	string = {fields = {"split", "trim"}},
-	table  = {fields = {"copy", "getn", "indexof", "insert_all", "combine"}},
+	table  = {fields = {"copy", "getn", "indexof", "insert_all"}},
 	math   = {fields = {"hypot", "round"}},
 }
 
@@ -70,6 +70,7 @@ files["builtin/mainmenu"] = {
 
 	read_globals = {
 		"PLATFORM",
+		"TOUCHSCREEN_GUI",
 	},
 }
 
@@ -78,5 +79,11 @@ files["builtin/common/tests"] = {
 		"describe",
 		"it",
 		"assert",
+	},
+}
+
+files["builtin/fstk"] = {
+	read_globals = {
+		"TOUCHSCREEN_GUI",
 	},
 }

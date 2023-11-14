@@ -66,7 +66,7 @@ GUITable::GUITable(gui::IGUIEnvironment *env,
 					0,
 					RelativeRect.getWidth(),
 					RelativeRect.getHeight()),
-			false, true);
+			false, true, tsrc);
 	m_scrollbar->setSubElement(true);
 	m_scrollbar->setTabStop(false);
 	m_scrollbar->setAlignment(gui::EGUIA_LOWERRIGHT, gui::EGUIA_LOWERRIGHT,
@@ -84,7 +84,7 @@ GUITable::GUITable(gui::IGUIEnvironment *env,
 #endif
 	core::rect<s32> relative_rect = m_scrollbar->getRelativePosition();
 	s32 width = (relative_rect.getWidth() / (2.0 / 3.0)) * density *
-			g_settings->getFloat("gui_scaling");
+			g_settings->getFloat("gui_scaling", 0.5f, 20.0f);
 	m_scrollbar->setRelativePosition(core::rect<s32>(
 			relative_rect.LowerRightCorner.X-width,relative_rect.UpperLeftCorner.Y,
 			relative_rect.LowerRightCorner.X,relative_rect.LowerRightCorner.Y
@@ -901,7 +901,7 @@ bool GUITable::OnEvent(const SEvent &event)
 		setToolTipText(cell ? m_strings[cell->tooltip_index].c_str() : L"");
 
 		// Fix for #1567/#1806:
-		// IGUIScrollBar passes double click events to its parent,
+		// GUIScrollBar passes double click events to its parent,
 		// which we don't want. Detect this case and discard the event
 		if (event.MouseInput.Event != EMIE_MOUSE_MOVED &&
 				m_scrollbar->isVisible() &&

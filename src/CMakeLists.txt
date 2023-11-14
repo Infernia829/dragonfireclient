@@ -1,7 +1,18 @@
 project(minetest)
 
+INCLUDE(CheckTypeSize)
 INCLUDE(CheckIncludeFiles)
 INCLUDE(CheckLibraryExists)
+
+check_type_size(int SIZEOF_INT BUILTIN_TYPES_ONLY LANGUAGE CXX)
+if(SIZEOF_INT LESS 4)
+	message(FATAL_ERROR "Minetest will not work with int less than 32 bits wide.")
+endif()
+
+check_type_size(size_t SIZEOF_SIZE_T LANGUAGE CXX)
+if(SIZEOF_SIZE_T LESS 4)
+	message(FATAL_ERROR "Minetest will not work with size_t less than 32 bits wide.")
+endif()
 
 # Add custom SemiDebug build mode
 set(CMAKE_CXX_FLAGS_SEMIDEBUG "-O1 -g -Wall" CACHE STRING
@@ -97,10 +108,6 @@ if(BUILD_CLIENT AND ENABLE_SOUND)
 			"To continue, either fill in the required paths or disable sound. (-DENABLE_SOUND=0)")
 	endif()
 endif()
-
-# TODO: this should be removed one day, we can enable it unconditionally
-option(ENABLE_GLES "Enable extra support code for OpenGL ES" FALSE)
-mark_as_advanced(ENABLE_GLES)
 
 option(ENABLE_TOUCH "Enable Touchscreen support" FALSE)
 if(ENABLE_TOUCH)
@@ -241,6 +248,10 @@ endif()
 # Use cmake_config.h
 add_definitions(-DUSE_CMAKE_CONFIG_H)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+set(PLATFORM_LIBS Threads::Threads)
+
 if(WIN32)
 	# Windows
 	if(MSVC) # MSVC Specifics
@@ -249,10 +260,8 @@ if(WIN32)
 		add_definitions ( /D "_CRT_SECURE_NO_DEPRECATE" /W1 )
 		# Get M_PI to work
 		add_definitions(/D "_USE_MATH_DEFINES")
-		# Dont define min/max macros in minwindef.h
+		# Don't define min/max macros in minwindef.h
 		add_definitions(/D "NOMINMAX")
-	else() # Probably MinGW = GCC
-		set(PLATFORM_LIBS "")
 	endif()
 	set(PLATFORM_LIBS ws2_32.lib version.lib shlwapi.lib winmm.lib ${PLATFORM_LIBS})
 
@@ -276,13 +285,7 @@ if(WIN32)
 	endif()
 else()
 	# Unix probably
-	if(BUILD_CLIENT)
-		if(NOT HAIKU AND NOT APPLE)
-			find_package(X11 REQUIRED)
-		endif(NOT HAIKU AND NOT APPLE)
-	endif()
-
-	set(PLATFORM_LIBS -lpthread ${CMAKE_DL_LIBS})
+	set(PLATFORM_LIBS ${PLATFORM_LIBS} ${CMAKE_DL_LIBS})
 	if(APPLE)
 		set(PLATFORM_LIBS "-framework CoreFoundation" ${PLATFORM_LIBS})
 	else()
@@ -292,16 +295,23 @@ else()
 		endif(HAVE_LIBRT)
 	endif(APPLE)
 
-	# Prefer local iconv if installed
 	find_library(ICONV_LIBRARY iconv)
 	mark_as_advanced(ICONV_LIBRARY)
 	if (ICONV_LIBRARY)
 		set(PLATFORM_LIBS ${PLATFORM_LIBS} ${ICONV_LIBRARY})
 	endif()
+
 	if (HAIKU)
-		set(PLATFORM_LIBS ${PLATFORM_LIBS} intl network)
+		set(PLATFORM_LIBS ${PLATFORM_LIBS} network)
 	endif()
 
+	if (ANDROID)
+		include_directories(${ANDROID_NDK}/sources/android/native_app_glue)
+		add_library(native_app_glue OBJECT ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c)
+		set(PLATFORM_LIBS ${PLATFORM_LIBS} native_app_glue)
+
+		set(PLATFORM_LIBS ${PLATFORM_LIBS} android log)
+	endif()
 endif()
 
 check_include_files(endian.h HAVE_ENDIAN_H)
@@ -363,6 +373,7 @@ set(common_SRCS
 	itemdef.cpp
 	itemstackmetadata.cpp
 	light.cpp
+	lighting.cpp
 	log.cpp
 	main.cpp
 	map.cpp
@@ -409,6 +420,10 @@ set(common_SRCS
 	${common_SCRIPT_SRCS}
 	${UTIL_SRCS}
 )
+
+if(ANDROID)
+	set(common_SRCS ${common_SRCS} porting_android.cpp)
+endif()
 
 if(BUILD_UNITTESTS)
 	set(common_SRCS ${common_SRCS} ${UNITTEST_SRCS})
@@ -499,7 +514,6 @@ if(BUILD_CLIENT)
 	include_directories(SYSTEM
 		${FREETYPE_INCLUDE_DIRS}
 		${SOUND_INCLUDE_DIRS}
-		${X11_INCLUDE_DIR}
 	)
 endif()
 
@@ -515,14 +529,17 @@ if(NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_CLIENT)
-	add_executable(${PROJECT_NAME} ${client_SRCS} ${extra_windows_SRCS})
+	if(ANDROID)
+		add_library(${PROJECT_NAME} SHARED ${client_SRCS})
+	else()
+		add_executable(${PROJECT_NAME} ${client_SRCS} ${extra_windows_SRCS})
+	endif()
 	add_dependencies(${PROJECT_NAME} GenerateVersion)
 	target_link_libraries(
 		${PROJECT_NAME}
 		${ZLIB_LIBRARIES}
 		IrrlichtMt::IrrlichtMt
 		${ZSTD_LIBRARY}
-		${X11_LIBRARIES}
 		${SOUND_LIBRARIES}
 		${SQLITE3_LIBRARY}
 		${LUA_LIBRARY}
@@ -643,17 +660,9 @@ if(BUILD_SERVER)
 	endif()
 endif(BUILD_SERVER)
 
-# Blacklisted locales that don't work.
-# see issue #4638
-set(GETTEXT_BLACKLISTED_LOCALES
-	ar
-	dv
-	he
-	hi
-	kn
-	ms_Arab
-	th
-)
+# See issue #4638
+FILE(READ "${CMAKE_SOURCE_DIR}/src/unsupported_language_list.txt" GETTEXT_BLACKLISTED_LOCALES)
+STRING(REGEX REPLACE "\n" ";" GETTEXT_BLACKLISTED_LOCALES "${GETTEXT_BLACKLISTED_LOCALES}")
 
 option(APPLY_LOCALE_BLACKLIST "Use a blacklist to avoid known broken locales" TRUE)
 
@@ -672,10 +681,45 @@ endif()
 # Set some optimizations and tweaks
 
 include(CheckCSourceCompiles)
+include(CheckSymbolExists)
+
+set(CMAKE_REQUIRED_INCLUDES ${LUA_INCLUDE_DIR})
+if(USE_LUAJIT)
+	set(CMAKE_REQUIRED_LIBRARIES ${LUA_LIBRARY})
+	# LuaJIT provides exactly zero ways to determine how recent it is (the version
+	# is unchanged since 2017), however it happens that string buffers were added
+	# after the changes which we care about so that works as an indicator.
+	# (https://github.com/LuaJIT/LuaJIT/commit/4c6b669 March 2021)
+	unset(HAVE_RECENT_LJ CACHE)
+	check_symbol_exists(luaopen_string_buffer "lualib.h" HAVE_RECENT_LJ)
+	if(NOT HAVE_RECENT_LJ)
+		string(CONCAT explanation_msg
+			"You are using a relatively old version of LuaJIT. We recommend "
+			"running a recent version (from git) as older ones are known not "
+			"to build/work correctly in all cases.\n"
+			"THIS APPLIES ESPECIALLY ON macOS OR Linux/aarch64!")
+		message(WARNING ${explanation_msg})
+	endif()
+elseif(NOT MSVC)
+	set(CMAKE_REQUIRED_LIBRARIES "")
+	unset(HAVE_ATCCALL CACHE)
+	# Note: we need to check the function without having the library
+	#       available for linking, so check_symbol_exists won't work.
+	# Incidentally this doesn't seem to work on MSVC...
+	check_c_source_compiles("#include <lua.h>\nint main(){return sizeof(lua_atccall);}" HAVE_ATCCALL)
+	if(NOT HAVE_ATCCALL)
+		string(CONCAT explanation_msg
+			"It looks like you're trying to build Minetest using a system-wide "
+			"Lua installation. This is no longer supported because PUC Lua "
+			"cannot interoperate with C++ correctly. Read src/unittest/test_lua.cpp "
+			" for technical details.")
+		message(FATAL_ERROR ${explanation_msg})
+	endif()
+endif()
 
 if(MSVC)
 	# Visual Studio
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D WIN32_LEAN_AND_MEAN")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D _WIN32_WINNT=0x0601 /D WIN32_LEAN_AND_MEAN")
 	# EHa enables SEH exceptions (used for catching segfaults)
 	set(CMAKE_CXX_FLAGS_RELEASE "/EHa /Ox /MD /GS- /Zi /fp:fast /D NDEBUG /D _HAS_ITERATOR_DEBUGGING=0")
 	if(CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -709,42 +753,22 @@ if(MSVC)
 else()
 	# GCC or compatible compilers such as Clang
 	set(WARNING_FLAGS "-Wall -Wextra")
-	set(WARNING_FLAGS "${WARNING_FLAGS} -Wno-unused-parameter -Wno-implicit-fallthrough")
+	set(WARNING_FLAGS "${WARNING_FLAGS} -Wno-unused-parameter")
 	if(WARN_ALL)
 		set(RELEASE_WARNING_FLAGS "${WARNING_FLAGS}")
 	else()
 		set(RELEASE_WARNING_FLAGS "")
 	endif()
 
-	if(APPLE AND USE_LUAJIT)
-		# required per http://luajit.org/install.html
-		SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -pagezero_size 10000 -image_base 100000000")
-	elseif(UNIX AND USE_LUAJIT)
-		check_c_source_compiles("#ifndef __aarch64__\n#error\n#endif\nint main(){}" IS_AARCH64)
-		if(IS_AARCH64)
-			# Move text segment below LuaJIT's 47-bit limit (see issue #9367)
-			if(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
-				# FreeBSD uses lld, and lld does not support -Ttext-segment, suggesting
-				# --image-base instead. Not sure if it's equivalent change for the purpose
-				# but at least if fixes build on FreeBSD/aarch64
-				# XXX: the condition should also be changed to check for lld regardless of
-				# os, bit CMake doesn't have anything like CMAKE_LINKER_IS_LLD yet
-				SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--image-base=0x200000000")
-			else()
-				SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Ttext-segment=0x200000000")
-			endif()
-		endif()
-	endif()
-
 	if(MINGW)
 		set(OTHER_FLAGS "${OTHER_FLAGS} -mthreads -fexceptions")
-		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWIN32_LEAN_AND_MEAN")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_WIN32_WINNT=0x0601 -DWIN32_LEAN_AND_MEAN")
 	endif()
 
 	# Use a safe subset of flags to speed up math calculations:
 	# - we don't need errno or math exceptions
-	# - we don't deal with Inf/NaN or signed zero
-	set(MATH_FLAGS "-fno-math-errno -fno-trapping-math -ffinite-math-only -fno-signed-zeros")
+	# - we don't deal with signed zero
+	set(MATH_FLAGS "-fno-math-errno -fno-trapping-math -fno-signed-zeros")
 
 	# Enable SSE for floating point math on 32-bit x86 by default
 	# reasoning see minetest issue #11810 and https://gcc.gnu.org/wiki/FloatingPointMath
@@ -756,23 +780,22 @@ else()
 		endif()
 	endif()
 
-	set(CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG ${RELEASE_WARNING_FLAGS} ${OTHER_FLAGS} -pipe -funroll-loops")
-	if(CMAKE_SYSTEM_NAME MATCHES "(Darwin|BSD|DragonFly)")
-		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Os")
+	set(CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG ${RELEASE_WARNING_FLAGS} ${OTHER_FLAGS} -pipe -funroll-loops -O3 -fomit-frame-pointer")
+	if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+			AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+			AND CMAKE_CXX_COMPILER_VERSION MATCHES "^9\\.")
+		# Clang 9 has broken -ffast-math on glibc
 	else()
-		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fomit-frame-pointer")
-		if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
-				AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-				AND CMAKE_CXX_COMPILER_VERSION MATCHES "^9\\.")
-			# Clang 9 has broken -ffast-math on glibc
-		else()
-			set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${MATH_FLAGS}")
-		endif()
+		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${MATH_FLAGS}")
 	endif()
 	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELEASE} -g")
 	set(CMAKE_CXX_FLAGS_SEMIDEBUG "-g -O1 ${WARNING_FLAGS} ${OTHER_FLAGS}")
 	set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 ${WARNING_FLAGS} ${OTHER_FLAGS}")
 
+	if(UNIX)
+		# enable assertions for libstdc++ or libc++
+		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wp,-D_GLIBCXX_ASSERTIONS -Wp,-D_LIBCPP_ENABLE_ASSERTIONS=1")
+	endif()
 	if(USE_GPROF)
 		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -pg")
 	endif()
@@ -851,7 +874,7 @@ if(WIN32)
 	endif()
 endif()
 
-if(BUILD_CLIENT)
+if(BUILD_CLIENT AND NOT ANDROID)
 	install(TARGETS ${PROJECT_NAME}
 		RUNTIME DESTINATION ${BINDIR}
 		LIBRARY DESTINATION ${BINDIR}
@@ -877,13 +900,16 @@ if(BUILD_CLIENT)
 
 	install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../fonts" DESTINATION "${SHAREDIR}"
 			FILES_MATCHING PATTERN "*.ttf" PATTERN "*.txt")
-endif(BUILD_CLIENT)
+endif()
 
 if(BUILD_SERVER)
 	install(TARGETS ${PROJECT_NAME}server DESTINATION ${BINDIR})
 endif()
 
-if (USE_GETTEXT)
+if (ANDROID)
+	# Android does this manually in app/build.gradle -> prepareAssets
+	# for now!
+elseif (USE_GETTEXT)
 	set(MO_FILES)
 
 	foreach(LOCALE ${GETTEXT_USED_LOCALES})

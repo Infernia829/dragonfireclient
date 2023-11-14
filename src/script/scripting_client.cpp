@@ -20,34 +20,27 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "scripting_client.h"
 #include "client/client.h"
-#include "client/game.h"
 #include "cpp_api/s_internal.h"
 #include "lua_api/l_client.h"
-#include "lua_api/l_clientobject.h"
 #include "lua_api/l_env.h"
-#include "lua_api/l_inventoryaction.h"
 #include "lua_api/l_item.h"
 #include "lua_api/l_itemstackmeta.h"
 #include "lua_api/l_minimap.h"
 #include "lua_api/l_modchannels.h"
 #include "lua_api/l_particles_local.h"
 #include "lua_api/l_storage.h"
-#include "lua_api/l_sound.h"
 #include "lua_api/l_util.h"
 #include "lua_api/l_item.h"
 #include "lua_api/l_nodemeta.h"
-#include "lua_api/l_noise.h"
 #include "lua_api/l_localplayer.h"
 #include "lua_api/l_camera.h"
 #include "lua_api/l_settings.h"
-#include "lua_api/l_http.h"
-#include "lua_api/l_vmanip.h"
+#include "lua_api/l_client_sound.h"
 
 ClientScripting::ClientScripting(Client *client):
 	ScriptApiBase(ScriptingType::Client)
 {
 	setGameDef(client);
-	setGame(g_game);
 
 	SCRIPTAPI_PRECHECKHEADER
 
@@ -73,11 +66,6 @@ ClientScripting::ClientScripting(Client *client):
 void ClientScripting::InitializeModApi(lua_State *L, int top)
 {
 	LuaItemStack::Register(L);
-	LuaPerlinNoise::Register(L);
-	LuaPerlinNoiseMap::Register(L);
-	LuaPseudoRandom::Register(L);
-	LuaPcgRandom::Register(L);
-	LuaSecureRandom::Register(L);
 	ItemStackMetaRef::Register(L);
 	LuaRaycast::Register(L);
 	StorageRef::Register(L);
@@ -87,18 +75,16 @@ void ClientScripting::InitializeModApi(lua_State *L, int top)
 	LuaCamera::Register(L);
 	ModChannelRef::Register(L);
 	LuaSettings::Register(L);
-	ClientObjectRef::Register(L);
-	LuaInventoryAction::Register(L);
-	LuaVoxelManip::Register(L);
+	ClientSoundHandle::Register(L);
 
-	ModApiItemMod::Initialize(L, top);
 	ModApiUtil::InitializeClient(L, top);
-	ModApiHttp::Initialize(L, top);
 	ModApiClient::Initialize(L, top);
+	ModApiItem::InitializeClient(L, top);
 	ModApiStorage::Initialize(L, top);
-	ModApiEnvMod::InitializeClient(L, top);
+	ModApiEnv::InitializeClient(L, top);
 	ModApiChannels::Initialize(L, top);
 	ModApiParticlesLocal::Initialize(L, top);
+	ModApiClientSound::Initialize(L, top);
 }
 
 void ClientScripting::on_client_ready(LocalPlayer *localplayer)

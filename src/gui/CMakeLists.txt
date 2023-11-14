@@ -4,7 +4,6 @@ if(ENABLE_TOUCH)
 endif()
 
 set(gui_SRCS
-	${CMAKE_CURRENT_SOURCE_DIR}/cheatMenu.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiAnimatedImage.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiBackgroundImage.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/guiBox.cpp

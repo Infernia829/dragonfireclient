@@ -58,7 +58,7 @@ extern "C" {
 	setOriginFromTableRaw(index, __FUNCTION__)
 
 enum class ScriptingType: u8 {
-	Async,
+	Async, // either mainmenu (client) or ingame (server)
 	Client,
 	MainMenu,
 	Server
@@ -67,12 +67,10 @@ enum class ScriptingType: u8 {
 class Server;
 #ifndef SERVER
 class Client;
-class Game;
 #endif
 class IGameDef;
 class Environment;
 class GUIEngine;
-class ActiveObject;
 class ServerActiveObject;
 struct PlayerHPChangeReason;
 
@@ -99,15 +97,15 @@ public:
 		RunCallbacksMode mode, const char *fxn);
 
 	/* object */
-	void addObjectReference(ActiveObject *cobj);
-	void removeObjectReference(ActiveObject *cobj);
+	void addObjectReference(ServerActiveObject *cobj);
+	void removeObjectReference(ServerActiveObject *cobj);
+
+	ScriptingType getType() { return m_type; }
 
 	IGameDef *getGameDef() { return m_gamedef; }
 	Server* getServer();
-	ScriptingType getType() { return m_type; }
 #ifndef SERVER
 	Client* getClient();
-	Game *getGame() { return m_game; }
 #endif
 
 	// IMPORTANT: these cannot be used for any security-related uses, they exist
@@ -118,6 +116,9 @@ public:
 
 	void clientOpenLibs(lua_State *L);
 
+	// Check things that should be set by the builtin mod.
+	void checkSetByBuiltin();
+
 protected:
 	friend class LuaABM;
 	friend class LuaLBM;
@@ -125,7 +126,7 @@ protected:
 	friend class ObjectRef;
 	friend class NodeMetaRef;
 	friend class ModApiBase;
-	friend class ModApiEnvMod;
+	friend class ModApiEnv;
 	friend class LuaVoxelManip;
 
 	/*
@@ -148,9 +149,6 @@ protected:
 	void stackDump(std::ostream &o);
 
 	void setGameDef(IGameDef* gamedef) { m_gamedef = gamedef; }
-#ifndef SERVER
-	void setGame(Game *game) { m_game = game; }
-#endif
 
 	Environment* getEnv() { return m_environment; }
 	void setEnv(Environment* env) { m_environment = env; }
@@ -178,9 +176,6 @@ private:
 	lua_State      *m_luastack = nullptr;
 
 	IGameDef       *m_gamedef = nullptr;
-#ifndef SERVER
-	Game       *m_game = nullptr;
-#endif
 	Environment    *m_environment = nullptr;
 #ifndef SERVER
 	GUIEngine      *m_guiengine = nullptr;

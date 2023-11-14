@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>minetest</string>
 	<key>CFBundleIconFile</key>
-	<string>dragonfire-icon.icns</string>
+	<string>minetest-icon.icns</string>
 	<key>CFBundleName</key>
 	<string>Minetest</string>
 	<key>CFBundleDisplayName</key>

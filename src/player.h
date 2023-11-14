@@ -96,20 +96,39 @@ struct PlayerControl
 	float movement_direction = 0.0f;
 };
 
+struct PlayerPhysicsOverride
+{
+	float speed = 1.f;
+	float jump = 1.f;
+	float gravity = 1.f;
+
+	bool sneak = true;
+	bool sneak_glitch = false;
+	// "Temporary" option for old move code
+	bool new_move = true;
+
+	float speed_climb = 1.f;
+	float speed_crouch = 1.f;
+	float liquid_fluidity = 1.f;
+	float liquid_fluidity_smooth = 1.f;
+	float liquid_sink = 1.f;
+	float acceleration_default = 1.f;
+	float acceleration_air = 1.f;
+};
+
 struct PlayerSettings
 {
 	bool free_move = false;
 	bool pitch_move = false;
 	bool fast_move = false;
-	bool freecam = false;
 	bool continuous_forward = false;
 	bool always_fly_fast = false;
 	bool aux1_descends = false;
 	bool noclip = false;
 	bool autojump = false;
 
-	const std::string setting_names[9] = {
-		"free_move", "pitch_move", "fast_move", "freecam", "continuous_forward", "always_fly_fast",
+	const std::string setting_names[8] = {
+		"free_move", "pitch_move", "fast_move", "continuous_forward", "always_fly_fast",
 		"aux1_descends", "noclip", "autojump"
 	};
 	void readGlobalSettings();
@@ -135,12 +154,14 @@ public:
 			std::vector<CollisionInfo> *collision_info)
 	{}
 
-	const v3f &getSpeed() const
+	// in BS-space
+	v3f getSpeed() const
 	{
 		return m_speed;
 	}
 
-	void setSpeed(const v3f &speed)
+	// in BS-space
+	void setSpeed(v3f speed)
 	{
 		m_speed = speed;
 	}
@@ -159,6 +180,7 @@ public:
 
 	v3f eye_offset_first;
 	v3f eye_offset_third;
+	v3f eye_offset_third_front;
 
 	Inventory inventory;
 
@@ -183,6 +205,7 @@ public:
 
 	PlayerControl control;
 	const PlayerControl& getPlayerControl() { return control; }
+	PlayerPhysicsOverride physics_override;
 	PlayerSettings &getPlayerSettings() { return m_player_settings; }
 	static void settingsChangedCallback(const std::string &name, void *data);
 
@@ -211,7 +234,7 @@ public:
 
 protected:
 	char m_name[PLAYERNAME_SIZE];
-	v3f m_speed;
+	v3f m_speed; // velocity; in BS-space
 	u16 m_wield_index = 0;
 	PlayerFovSpec m_fov_override_spec = { 0.0f, false, 0.0f };
 

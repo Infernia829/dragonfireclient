@@ -21,6 +21,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "luaentity_sao.h"
 #include "collision.h"
 #include "constants.h"
+#include "inventory.h"
+#include "irrlicht_changes/printing.h"
 #include "player_sao.h"
 #include "scripting_server.h"
 #include "server.h"
@@ -69,8 +71,12 @@ LuaEntitySAO::LuaEntitySAO(ServerEnvironment *env, v3f pos, const std::string &d
 		break;
 	}
 	// create object
-	infostream << "LuaEntitySAO::create(name=\"" << name << "\" state=\""
-			 << state << "\")" << std::endl;
+	infostream << "LuaEntitySAO::create(name=\"" << name << "\" state is";
+	if (state.empty())
+		infostream << "empty";
+	else
+		infostream << state.size() << " bytes";
+	infostream << ")" << std::endl;
 
 	m_init_name = name;
 	m_init_state = state;
@@ -101,7 +107,7 @@ void LuaEntitySAO::addedToEnvironment(u32 dtime_s)
 	if(m_registered){
 		// Get properties
 		m_env->getScriptIface()->
-			luaentity_GetProperties(m_id, this, &m_prop);
+			luaentity_GetProperties(m_id, this, &m_prop, m_init_name);
 		// Initialize HP from properties
 		m_hp = m_prop.hp_max;
 		// Activate entity, supplying serialized state
@@ -117,13 +123,13 @@ void LuaEntitySAO::addedToEnvironment(u32 dtime_s)
 	}
 }
 
-void LuaEntitySAO::dispatchScriptDeactivate()
+void LuaEntitySAO::dispatchScriptDeactivate(bool removal)
 {
 	// Ensure that this is in fact a registered entity,
 	// and that it isn't already gone.
 	// The latter also prevents this from ever being called twice.
 	if (m_registered && !isGone())
-		m_env->getScriptIface()->luaentity_Deactivate(m_id);
+		m_env->getScriptIface()->luaentity_Deactivate(m_id, removal);
 }
 
 void LuaEntitySAO::step(float dtime, bool send_recommended)
@@ -175,8 +181,7 @@ void LuaEntitySAO::step(float dtime, bool send_recommended)
 			m_velocity = p_velocity;
 			m_acceleration = p_acceleration;
 		} else {
-			m_base_position += dtime * m_velocity + 0.5 * dtime
-					* dtime * m_acceleration;
+			m_base_position += (m_velocity + m_acceleration * 0.5f * dtime) * dtime;
 			m_velocity += dtime * m_acceleration;
 		}
 
@@ -196,6 +201,11 @@ void LuaEntitySAO::step(float dtime, bool send_recommended)
 				m_rotation.Y = target_yaw;
 			}
 		}
+	}
+
+	if (fabs(m_prop.automatic_rotate) > 0.001f) {
+		m_rotation_add_yaw = modulo360f(m_rotation_add_yaw + dtime * core::RADTODEG *
+				m_prop.automatic_rotate);
 	}
 
 	if(m_registered) {
@@ -275,7 +285,6 @@ std::string LuaEntitySAO::getClientInitializationData(u16 protocol_version)
 
 void LuaEntitySAO::getStaticData(std::string *result) const
 {
-	verbosestream<<FUNCTION_NAME<<std::endl;
 	std::ostringstream os(std::ios::binary);
 	// version must be 1 to keep backwards-compatibility. See version2
 	writeU8(os, 1);
@@ -290,7 +299,7 @@ void LuaEntitySAO::getStaticData(std::string *result) const
 		os<<serializeString32(m_init_state);
 	}
 	writeU16(os, m_hp);
-	writeV3F1000(os, m_velocity);
+	writeV3F1000(os, clampToF1000(m_velocity));
 	// yaw
 	writeF1000(os, m_rotation.Y);
 
@@ -385,7 +394,7 @@ std::string LuaEntitySAO::getDescription()
 	std::ostringstream oss;
 	oss << "LuaEntitySAO \"" << m_init_name << "\" ";
 	auto pos = floatToInt(m_base_position, BS);
-	oss << "at " << PP(pos);
+	oss << "at " << pos;
 	return oss.str();
 }
 
@@ -405,7 +414,7 @@ void LuaEntitySAO::setHP(s32 hp, const PlayerHPChangeReason &reason)
 			m_env->getScriptIface()->luaentity_on_death(m_id, killer);
 		}
 		markForRemoval();
-	}	
+	}
 }
 
 u16 LuaEntitySAO::getHP() const

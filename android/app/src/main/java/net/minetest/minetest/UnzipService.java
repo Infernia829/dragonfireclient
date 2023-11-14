@@ -28,11 +28,10 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
-import android.os.Environment;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 
 import java.io.File;
@@ -77,9 +76,6 @@ public class UnzipService extends IntentService {
 		try {
 			setIsRunning(true);
 			File userDataDirectory = Utils.getUserDataDirectory(this);
-			if (userDataDirectory == null) {
-				throw new IOException("Unable to find user data directory");
-			}
 
 			try (InputStream in = this.getAssets().open(zipFile.getName())) {
 				try (OutputStream out = new FileOutputStream(zipFile)) {
@@ -91,14 +87,15 @@ public class UnzipService extends IntentService {
 				}
 			}
 
-			migrate(notificationBuilder, userDataDirectory);
 			unzip(notificationBuilder, zipFile, userDataDirectory);
 		} catch (IOException e) {
 			isSuccess = false;
 			failureMessage = e.getLocalizedMessage();
 		} finally {
 			setIsRunning(false);
-			zipFile.delete();
+			if (!zipFile.delete()) {
+				Log.w("UnzipService", "Minetest installation ZIP cannot be deleted");
+			}
 		}
 	}
 
@@ -131,8 +128,12 @@ public class UnzipService extends IntentService {
 		Intent notificationIntent = new Intent(this, MainActivity.class);
 		notificationIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP
 			| Intent.FLAG_ACTIVITY_SINGLE_TOP);
+		int pendingIntentFlag = 0;
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+			pendingIntentFlag = PendingIntent.FLAG_MUTABLE;
+		}
 		PendingIntent intent = PendingIntent.getActivity(this, 0,
-			notificationIntent, 0);
+			notificationIntent, pendingIntentFlag);
 
 		builder.setContentTitle(getString(R.string.notification_title))
 				.setSmallIcon(R.mipmap.ic_launcher)
@@ -179,9 +180,9 @@ public class UnzipService extends IntentService {
 		try {
 			Process p = new ProcessBuilder("/system/bin/mv",
 				src.getAbsolutePath(), dst.getAbsolutePath()).start();
-			int exitcode = p.waitFor();
-			if (exitcode != 0)
-				throw new IOException("Move failed with exit code " + exitcode);
+			int exitCode = p.waitFor();
+			if (exitCode != 0)
+				throw new IOException("Move failed with exit code " + exitCode);
 		} catch (InterruptedException e) {
 			throw new IOException("Move operation interrupted");
 		}
@@ -195,40 +196,6 @@ public class UnzipService extends IntentService {
 		} catch (IOException | InterruptedException e) {
 			return false;
 		}
-	}
-
-	/**
-	 * Migrates user data from deprecated external storage to app scoped storage
-	 */
-	private void migrate(Notification.Builder notificationBuilder, File newLocation) throws IOException {
-		if (Build.VERSION.SDK_INT >=  Build.VERSION_CODES.R) {
-			return;
-		}
-
-		File oldLocation = new File(Environment.getExternalStorageDirectory(), "Minetest");
-		if (!oldLocation.isDirectory())
-			return;
-
-		publishProgress(notificationBuilder, R.string.migrating, 0);
-		newLocation.mkdir();
-
-		String[] dirs = new String[] { "worlds", "games", "mods", "textures", "client" };
-		for (int i = 0; i < dirs.length; i++) {
-			publishProgress(notificationBuilder, R.string.migrating, 100 * i / dirs.length);
-			File dir = new File(oldLocation, dirs[i]), dir2 = new File(newLocation, dirs[i]);
-			if (dir.isDirectory() && !dir2.isDirectory()) {
-				moveFileOrDir(dir, dir2);
-			}
-		}
-
-		for (String filename : new String[] { "minetest.conf" }) {
-			File file = new File(oldLocation, filename), file2 = new File(newLocation, filename);
-			if (file.isFile() && !file2.isFile()) {
-				moveFileOrDir(file, file2);
-			}
-		}
-
-		recursivelyDeleteDirectory(oldLocation);
 	}
 
 	private void publishProgress(@Nullable  Notification.Builder notificationBuilder, @StringRes int message, int progress) {

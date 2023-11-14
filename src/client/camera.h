@@ -22,10 +22,13 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irrlichttypes_extrabloated.h"
 #include "inventory.h"
 #include "client/tile.h"
+#include "client/localplayer.h"
 #include <ICameraSceneNode.h>
 #include <ISceneNode.h>
+#include <plane3d.h>
+#include <array>
 #include <list>
-#include "util/Optional.h"
+#include <optional>
 
 class LocalPlayer;
 struct MapDrawControl;
@@ -38,46 +41,20 @@ struct Nametag
 	scene::ISceneNode *parent_node;
 	std::string text;
 	video::SColor textcolor;
-	Optional<video::SColor> bgcolor;
+	std::optional<video::SColor> bgcolor;
 	v3f pos;
-	ITextureSource *texture_source;
-	std::vector<video::ITexture *> images;
-	core::dimension2di images_dim;
 
 	Nametag(scene::ISceneNode *a_parent_node,
 			const std::string &text,
 			const video::SColor &textcolor,
-			const Optional<video::SColor> &bgcolor,
-			const v3f &pos,
-			ITextureSource *tsrc,
-			const std::vector<std::string> &image_names):
+			const std::optional<video::SColor> &bgcolor,
+			const v3f &pos):
 		parent_node(a_parent_node),
 		text(text),
 		textcolor(textcolor),
 		bgcolor(bgcolor),
-		pos(pos),
-		texture_source(tsrc),
-		images(),
-		images_dim(0, 0)
+		pos(pos)
 	{
-		setImages(image_names);
-	}
-
-	void setImages(const std::vector<std::string> &image_names)
-	{
-		images.clear();
-		images_dim = core::dimension2di(0, 0);
-
-		for (const std::string &image_name : image_names) {
-			video::ITexture *texture = texture_source->getTexture(image_name);
-			core::dimension2di imgsize(texture->getOriginalSize());
-
-			images_dim.Width += imgsize.Width;
-			if (images_dim.Height < imgsize.Height)
-				images_dim.Height = imgsize.Height;
-
-			images.push_back(texture);
-		}
 	}
 
 	video::SColor getBgColor(bool use_fallback) const
@@ -159,6 +136,23 @@ public:
 		return MYMAX(m_fov_x, m_fov_y);
 	}
 
+	// Returns a lambda that when called with an object's position and bounding-sphere
+	// radius (both in BS space) returns true if, and only if the object should be
+	// frustum-culled.
+	auto getFrustumCuller() const
+	{
+		return [planes = getFrustumCullPlanes(),
+				camera_offset = intToFloat(m_camera_offset, BS)
+				](v3f position, f32 radius) {
+			v3f pos_camspace = position - camera_offset;
+			for (auto &plane : planes) {
+				if (plane.getDistanceTo(pos_camspace) > radius)
+					return true;
+			}
+			return false;
+		};
+	}
+
 	// Notify about new server-sent FOV and initialize smooth FOV transition
 	void notifyFovChange();
 
@@ -207,8 +201,7 @@ public:
 
 	Nametag *addNametag(scene::ISceneNode *parent_node,
 		const std::string &text, video::SColor textcolor,
-		Optional<video::SColor> bgcolor, const v3f &pos,
-		const std::vector<std::string> &image_names);
+		std::optional<video::SColor> bgcolor, const v3f &pos);
 
 	void removeNametag(Nametag *nametag);
 
@@ -217,6 +210,10 @@ public:
 	inline void addArmInertia(f32 player_yaw);
 
 private:
+	// Use getFrustumCuller().
+	// This helper just exists to decrease the header's number of includes.
+	std::array<core::plane3d<f32>, 4> getFrustumCullPlanes() const;
+
 	// Nodes
 	scene::ISceneNode *m_playernode = nullptr;
 	scene::ISceneNode *m_headnode = nullptr;

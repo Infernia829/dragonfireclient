@@ -71,7 +71,8 @@ Player::Player(const char *name, IItemDefManager *idef):
 		HUD_FLAG_HOTBAR_VISIBLE    | HUD_FLAG_HEALTHBAR_VISIBLE |
 		HUD_FLAG_CROSSHAIR_VISIBLE | HUD_FLAG_WIELDITEM_VISIBLE |
 		HUD_FLAG_BREATHBAR_VISIBLE | HUD_FLAG_MINIMAP_VISIBLE   |
-		HUD_FLAG_MINIMAP_RADAR_VISIBLE | HUD_FLAG_BASIC_DEBUG;
+		HUD_FLAG_MINIMAP_RADAR_VISIBLE | HUD_FLAG_BASIC_DEBUG   |
+		HUD_FLAG_CHAT_VISIBLE;
 
 	hud_hotbar_itemcount = HUD_HOTBAR_ITEMCOUNT_DEFAULT;
 
@@ -220,14 +221,13 @@ void PlayerControl::unpackKeysPressed(u32 keypress_bits)
 
 void PlayerSettings::readGlobalSettings()
 {
-	freecam = g_settings->getBool("freecam");
-	free_move = g_settings->getBool("free_move") || freecam;
+	free_move = g_settings->getBool("free_move");
 	pitch_move = g_settings->getBool("pitch_move");
-	fast_move = g_settings->getBool("fast_move") || freecam;
+	fast_move = g_settings->getBool("fast_move");
 	continuous_forward = g_settings->getBool("continuous_forward");
-	always_fly_fast = g_settings->getBool("always_fly_fast") || freecam;
+	always_fly_fast = g_settings->getBool("always_fly_fast");
 	aux1_descends = g_settings->getBool("aux1_descends");
-	noclip = g_settings->getBool("noclip") || freecam;
+	noclip = g_settings->getBool("noclip");
 	autojump = g_settings->getBool("autojump");
 }
 

@@ -25,32 +25,43 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <zstd.h>
 
 /* report a zlib or i/o error */
-void zerr(int ret)
+static void zerr(int ret)
 {
-    dstream<<"zerr: ";
-    switch (ret) {
-    case Z_ERRNO:
-        if (ferror(stdin))
-            dstream<<"error reading stdin"<<std::endl;
-        if (ferror(stdout))
-            dstream<<"error writing stdout"<<std::endl;
-        break;
-    case Z_STREAM_ERROR:
-        dstream<<"invalid compression level"<<std::endl;
-        break;
-    case Z_DATA_ERROR:
-        dstream<<"invalid or incomplete deflate data"<<std::endl;
-        break;
-    case Z_MEM_ERROR:
-        dstream<<"out of memory"<<std::endl;
-        break;
-    case Z_VERSION_ERROR:
-        dstream<<"zlib version mismatch!"<<std::endl;
+	dstream<<"zerr: ";
+	switch (ret) {
+	case Z_ERRNO:
+		if (ferror(stdin))
+			dstream<<"error reading stdin"<<std::endl;
+		if (ferror(stdout))
+			dstream<<"error writing stdout"<<std::endl;
+		break;
+	case Z_STREAM_ERROR:
+		dstream<<"invalid compression level"<<std::endl;
+		break;
+	case Z_DATA_ERROR:
+		dstream<<"invalid or incomplete deflate data"<<std::endl;
+		break;
+	case Z_MEM_ERROR:
+		dstream<<"out of memory"<<std::endl;
+		break;
+	case Z_VERSION_ERROR:
+		dstream<<"zlib version mismatch!"<<std::endl;
 		break;
 	default:
 		dstream<<"return value = "<<ret<<std::endl;
-    }
+	}
 }
+
+// Make sure that z is deleted in case of exception
+template <int (*F)(z_stream*)>
+class ZlibAutoDeleter {
+public:
+	ZlibAutoDeleter(z_stream *ptr) : ptr_(ptr) {}
+	~ZlibAutoDeleter() { F(ptr_); }
+
+private:
+	z_stream *ptr_;
+};
 
 void compressZlib(const u8 *data, size_t data_size, std::ostream &os, int level)
 {
@@ -67,6 +78,8 @@ void compressZlib(const u8 *data, size_t data_size, std::ostream &os, int level)
 	ret = deflateInit(&z, level);
 	if(ret != Z_OK)
 		throw SerializationError("compressZlib: deflateInit failed");
+
+	ZlibAutoDeleter<deflateEnd> deleter(&z);
 
 	// Point zlib to our input buffer
 	z.next_in = (Bytef*)&data[0];
@@ -91,8 +104,6 @@ void compressZlib(const u8 *data, size_t data_size, std::ostream &os, int level)
 		if(status == Z_STREAM_END)
 			break;
 	}
-
-	deflateEnd(&z);
 }
 
 void compressZlib(const std::string &data, std::ostream &os, int level)
@@ -118,6 +129,8 @@ void decompressZlib(std::istream &is, std::ostream &os, size_t limit)
 	ret = inflateInit(&z);
 	if(ret != Z_OK)
 		throw SerializationError("dcompressZlib: inflateInit failed");
+
+	ZlibAutoDeleter<inflateEnd> deleter(&z);
 
 	z.avail_in = 0;
 
@@ -180,8 +193,6 @@ void decompressZlib(std::istream &is, std::ostream &os, size_t limit)
 			break;
 		}
 	}
-
-	inflateEnd(&z);
 }
 
 struct ZSTD_Deleter {

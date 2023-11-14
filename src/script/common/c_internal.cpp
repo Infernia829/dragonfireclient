@@ -27,10 +27,11 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 std::string script_get_backtrace(lua_State *L)
 {
-	lua_rawgeti(L, LUA_REGISTRYINDEX, CUSTOM_RIDX_BACKTRACE);
+	lua_getglobal(L, "debug");
+	lua_getfield(L, -1, "traceback");
 	lua_call(L, 0, 1);
 	std::string result = luaL_checkstring(L, -1);
-	lua_pop(L, 1);
+	lua_pop(L, 2);
 	return result;
 }
 
@@ -41,9 +42,29 @@ int script_exception_wrapper(lua_State *L, lua_CFunction f)
 	} catch (const char *s) {  // Catch and convert exceptions.
 		lua_pushstring(L, s);
 	} catch (std::exception &e) {
-		lua_pushstring(L, e.what());
+		std::string e_descr = debug_describe_exc(e);
+		lua_pushlstring(L, e_descr.c_str(), e_descr.size());
 	}
 	return lua_error(L);  // Rethrow as a Lua error.
+}
+
+int script_error_handler(lua_State *L)
+{
+	lua_getglobal(L, "core");
+	lua_getfield(L, -1, "error_handler");
+	if (!lua_isnil(L, -1)) {
+		lua_pushvalue(L, 1);
+	} else {
+		// No Lua error handler available. Call debug.traceback(tostring(#1), level).
+		lua_getglobal(L, "debug");
+		lua_getfield(L, -1, "traceback");
+		lua_getglobal(L, "tostring");
+		lua_pushvalue(L, 1);
+		lua_call(L, 1, 1);
+	}
+	lua_pushinteger(L, 2); // Stack level
+	lua_call(L, 2, 1);
+	return 1;
 }
 
 /*
@@ -157,7 +178,8 @@ void log_deprecated(lua_State *L, std::string message, int stack_depth)
 	if (mode == DeprecatedHandlingMode::Ignore)
 		return;
 
-	script_log_add_source(L, message, stack_depth);
+	if (stack_depth >= 0)
+		script_log_add_source(L, message, stack_depth);
 	warningstream << message << std::endl;
 
 	if (mode == DeprecatedHandlingMode::Error)

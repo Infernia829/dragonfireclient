@@ -25,6 +25,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "nodedef.h"
 #include "util/string.h"
 #include "util/container.h"
+#include <utility>
 
 #define MAPGEN_DEFAULT MAPGEN_V7
 #define MAPGEN_DEFAULT_NAME "v7"
@@ -139,7 +140,6 @@ struct MapgenParams {
 	s32 getSpawnRangeMax();
 
 private:
-	void calcMapgenEdges();
 	bool m_mapgen_edges_calculated = false;
 };
 
@@ -163,6 +163,9 @@ public:
 	int id = -1;
 
 	MMVManip *vm = nullptr;
+	// Note that this contains various things the mapgens *can* use, so biomegen
+	// might be NULL while m_emerge->biomegen is not.
+	EmergeParams *m_emerge = nullptr;
 	const NodeDefManager *ndef = nullptr;
 
 	u32 blockseed;
@@ -175,7 +178,7 @@ public:
 
 	Mapgen() = default;
 	Mapgen(int mapgenid, MapgenParams *params, EmergeParams *emerge);
-	virtual ~Mapgen() = default;
+	virtual ~Mapgen();
 	DISABLE_CLASS_COPY(Mapgen);
 
 	virtual MapgenType getType() const { return MAPGEN_INVALID; }
@@ -190,12 +193,38 @@ public:
 
 	void updateLiquid(UniqueQueue<v3s16> *trans_liquid, v3s16 nmin, v3s16 nmax);
 
+	/**
+	 * Set light in entire area to fixed value.
+	 * @param light Light value (contains both banks)
+	 * @param nmin Area to operate on
+	 * @param nmax ^
+	 */
 	void setLighting(u8 light, v3s16 nmin, v3s16 nmax);
-	void lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u8>> &queue,
-		const v3s16 &p, u8 light);
+	/**
+	 * Run all lighting calculations.
+	 * @param nmin Area to spread sunlight in
+	 * @param nmax ^
+	 * @param full_nmin Area to recalculate light in
+	 * @param full_nmax ^
+	 * @param propagate_shadow see propagateSunlight()
+	 */
 	void calcLighting(v3s16 nmin, v3s16 nmax, v3s16 full_nmin, v3s16 full_nmax,
 		bool propagate_shadow = true);
+	/**
+	 * Spread sunlight from the area above downwards.
+	 * Note that affected nodes have their night bank cleared so you want to
+	 * run a light spread afterwards.
+	 * @param nmin Area to operate on
+	 * @param nmax ^
+	 * @param propagate_shadow Ignore obstructions above and spread sun anyway
+	 */
 	void propagateSunlight(v3s16 nmin, v3s16 nmax, bool propagate_shadow);
+	/**
+	 * Spread light in the given area.
+	 * Artificial light is taken from nodedef, sunlight must already be set.
+	 * @param nmin Area to operate on
+	 * @param nmax ^
+	 */
 	void spreadLight(const v3s16 &nmin, const v3s16 &nmax);
 
 	virtual void makeChunk(BlockMakeData *data) {}
@@ -218,6 +247,18 @@ public:
 	static void setDefaultSettings(Settings *settings);
 
 private:
+	/**
+	 * Spread light to the node at the given position, add to queue if changed.
+	 * The given light value is diminished once.
+	 * @param a VoxelArea being operated on
+	 * @param queue Queue for later lightSpread() calls
+	 * @param p Node position
+	 * @param light Light value (contains both banks)
+	 *
+	 */
+	void lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u8>> &queue,
+		const v3s16 &p, u8 light);
+
 	// isLiquidHorizontallyFlowable() is a helper function for updateLiquid()
 	// that checks whether there are floodable nodes without liquid beneath
 	// the node at index vi.
@@ -251,7 +292,6 @@ public:
 	virtual void generateDungeons(s16 max_stone_y);
 
 protected:
-	EmergeParams *m_emerge;
 	BiomeManager *m_bmgr;
 
 	Noise *noise_filler_depth;
@@ -291,3 +331,7 @@ protected:
 	s16 dungeon_ymin;
 	s16 dungeon_ymax;
 };
+
+// Calculate exact edges of the outermost mapchunks that are within the set
+// mapgen_limit. Returns the minimum and maximum edges in nodes in that order.
+std::pair<s16, s16> get_mapgen_edges(s16 mapgen_limit, s16 chunksize);

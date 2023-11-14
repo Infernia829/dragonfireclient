@@ -19,6 +19,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 #pragma once
 
+
 struct SkyColor
 {
 	video::SColor day_sky;
@@ -32,6 +33,8 @@ struct SkyColor
 
 struct SkyboxParams
 {
+	static constexpr float INVALID_SKYBOX_TILT = -1024.f;
+
 	video::SColor bgcolor;
 	std::string type;
 	std::vector<std::string> textures;
@@ -40,6 +43,9 @@ struct SkyboxParams
 	video::SColor fog_sun_tint;
 	video::SColor fog_moon_tint;
 	std::string fog_tint_type;
+	float body_orbit_tilt { INVALID_SKYBOX_TILT };
+	s16 fog_distance { -1 };
+	float fog_start { -1.0f };
 };
 
 struct SunParams
@@ -66,6 +72,7 @@ struct StarParams
 	u32 count;
 	video::SColor starcolor;
 	f32 scale;
+	f32 day_opacity;
 };
 
 struct CloudParams
@@ -141,6 +148,7 @@ public:
 		stars.count = 1000;
 		stars.starcolor = video::SColor(105, 235, 235, 255);
 		stars.scale = 1;
+		stars.day_opacity = 0;
 		return stars;
 	}
 

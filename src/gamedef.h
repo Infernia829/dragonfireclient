@@ -24,7 +24,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irrlichttypes.h"
 
 class IItemDefManager;
-class IWritableItemDefManager;
 class NodeDefManager;
 class ICraftDefManager;
 class ITextureSource;
@@ -33,14 +32,15 @@ class IRollbackManager;
 class EmergeManager;
 class Camera;
 class ModChannel;
-class ModMetadata;
-class ModMetadataDatabase;
+class ModStorage;
+class ModStorageDatabase;
 
-namespace irr { namespace scene {
+namespace irr::scene {
 	class IAnimatedMesh;
 	class ISceneManager;
-}}
+}
 
+struct SubgameSpec;
 struct ModSpec;
 /*
 	An interface for fetching game-global definitions like tool and
@@ -53,9 +53,7 @@ public:
 	// These are thread-safe IF they are not edited while running threads.
 	// Thus, first they are set up and then they are only read.
 	virtual IItemDefManager* getItemDefManager()=0;
-	virtual IWritableItemDefManager* getWritableItemDefManager()=0;
 	virtual const NodeDefManager* getNodeDefManager()=0;
-	virtual NodeDefManager* getWritableNodeDefManager()=0;
 	virtual ICraftDefManager* getCraftDefManager()=0;
 
 	// Used for keeping track of names/ids of unknown nodes
@@ -75,10 +73,9 @@ public:
 
 	virtual const std::vector<ModSpec> &getMods() const = 0;
 	virtual const ModSpec* getModSpec(const std::string &modname) const = 0;
+	virtual const SubgameSpec* getGameSpec() const { return nullptr; }
 	virtual std::string getWorldPath() const { return ""; }
-	virtual bool registerModStorage(ModMetadata *storage) = 0;
-	virtual void unregisterModStorage(const std::string &name) = 0;
-	virtual ModMetadataDatabase *getModStorageDatabase() = 0;
+	virtual ModStorageDatabase *getModStorageDatabase() = 0;
 
 	virtual bool joinModChannel(const std::string &channel) = 0;
 	virtual bool leaveModChannel(const std::string &channel) = 0;
