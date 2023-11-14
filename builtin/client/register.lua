@@ -46,26 +46,6 @@ function core.run_callbacks(callbacks, mode, ...)
 	return ret
 end
 
-function core.override_item(name, redefinition)
-	if redefinition.name ~= nil then
-		error("Attempt to redefine name of "..name.." to "..dump(redefinition.name), 2)
-	end
-	if redefinition.type ~= nil then
-		error("Attempt to redefine type of "..name.." to "..dump(redefinition.type), 2)
-	end
-	local itemdef = core.get_item_def(name)
-	if not itemdef then
-		error("Attempt to override non-existent item "..name, 2)
-	end
-	local nodedef = core.get_node_def(name)
-	table.combine(itemdef, nodedef)
-
-	for k, v in pairs(redefinition) do
-		rawset(itemdef, k, v)
-	end
-	core.register_item_raw(itemdef)
-end
-
 --
 -- Callback registration
 --
@@ -101,13 +81,3 @@ core.registered_on_item_use, core.register_on_item_use = make_registration()
 core.registered_on_modchannel_message, core.register_on_modchannel_message = make_registration()
 core.registered_on_modchannel_signal, core.register_on_modchannel_signal = make_registration()
 core.registered_on_inventory_open, core.register_on_inventory_open = make_registration()
-core.registered_on_recieve_physics_override, core.register_on_recieve_physics_override = make_registration()
-core.registered_on_play_sound, core.register_on_play_sound = make_registration()
-core.registered_on_spawn_particle, core.register_on_spawn_particle = make_registration()
-core.registered_on_object_properties_change, core.register_on_object_properties_change = make_registration()
-core.registered_on_object_hp_change, core.register_on_object_hp_change = make_registration()
-core.registered_on_object_add, core.register_on_object_add = make_registration()
-
-core.registered_nodes = {}
-core.registered_items = {}
-core.object_refs = {}

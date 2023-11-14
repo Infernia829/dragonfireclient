@@ -20,15 +20,19 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #pragma once
 
 #include "inventorymanager.h"
+#include <cassert>
 #include <functional>
+#include <memory>
+#include <unordered_map>
 
+class IItemDefManager;
 class ServerEnvironment;
 
 class ServerInventoryManager : public InventoryManager
 {
 public:
 	ServerInventoryManager();
-	virtual ~ServerInventoryManager();
+	virtual ~ServerInventoryManager() = default;
 
 	void setEnv(ServerEnvironment *env)
 	{
@@ -43,8 +47,7 @@ public:
 	Inventory *createDetachedInventory(const std::string &name, IItemDefManager *idef,
 			const std::string &player = "");
 	bool removeDetachedInventory(const std::string &name);
-	bool checkDetachedInventoryAccess(
-			const InventoryLocation &loc, const std::string &player) const;
+	bool checkDetachedInventoryAccess(const InventoryLocation &loc, const std::string &player) const;
 
 	void sendDetachedInventories(const std::string &peer_name, bool incremental,
 			std::function<void(const std::string &, Inventory *)> apply_cb);
@@ -52,7 +55,7 @@ public:
 private:
 	struct DetachedInventory
 	{
-		Inventory *inventory;
+		std::unique_ptr<Inventory> inventory;
 		std::string owner;
 	};
 

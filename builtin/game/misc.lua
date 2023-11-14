@@ -121,7 +121,7 @@ function core.get_player_radius_area(player_name, radius)
 end
 
 
--- To be overriden by protection mods
+-- To be overridden by protection mods
 
 function core.is_protected(pos, name)
 	return false
@@ -261,6 +261,11 @@ function core.get_globals_to_transfer()
 	local all = {
 		registered_items = copy_filtering(core.registered_items),
 		registered_aliases = core.registered_aliases,
+
+		nodedef_default = copy_filtering(core.nodedef_default),
+		craftitemdef_default = copy_filtering(core.craftitemdef_default),
+		tooldef_default = copy_filtering(core.tooldef_default),
+		noneitemdef_default = copy_filtering(core.noneitemdef_default),
 	}
 	return all
 end

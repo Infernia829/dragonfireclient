@@ -23,14 +23,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 #pragma once
 
-#ifdef _WIN32
-	#ifdef _WIN32_WINNT
-		#undef _WIN32_WINNT
-	#endif
-	#define _WIN32_WINNT 0x0501 // We need to do this before any other headers
-		// because those might include sdkddkver.h which defines _WIN32_WINNT if not already set
-#endif
-
 #include <string>
 #include <vector>
 #include "irrlicht.h"
@@ -54,6 +46,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 	#include <windows.h>
 
 	#define sleep_ms(x) Sleep(x)
+	#define sleep_us(x) Sleep((x)/1000)
 #else
 	#include <unistd.h>
 	#include <cstdint> //for uintptr_t
@@ -66,7 +59,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 		#define _GNU_SOURCE
 	#endif
 
-	#define sleep_ms(x) usleep(x*1000)
+	#define sleep_ms(x) usleep((x)*1000)
+	#define sleep_us(x) usleep(x)
 #endif
 
 #ifdef _MSC_VER
@@ -154,6 +148,11 @@ extern std::string path_locale;
 	Path to directory for storing caches.
 */
 extern std::string path_cache;
+
+/*
+	Gets the path of our executable.
+*/
+bool getCurrentExecPath(char *buf, size_t len);
 
 /*
 	Get full path of stuff in data directory.
@@ -329,6 +328,11 @@ bool secure_rand_fill_buf(void *buf, size_t len);
 
 // This attaches to the parents process console, or creates a new one if it doesnt exist.
 void attachOrCreateConsole();
+
+#ifdef _WIN32
+// Quotes an argument for use in a CreateProcess() commandline (not cmd.exe!!)
+std::string QuoteArgv(const std::string &arg);
+#endif
 
 int mt_snprintf(char *buf, const size_t buf_size, const char *fmt, ...);
 

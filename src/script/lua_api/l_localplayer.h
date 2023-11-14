@@ -26,7 +26,6 @@ class LocalPlayer;
 class LuaLocalPlayer : public ModApiBase
 {
 private:
-	static const char className[];
 	static const luaL_Reg methods[];
 
 	// garbage collector
@@ -34,21 +33,6 @@ private:
 
 	// get_velocity(self)
 	static int l_get_velocity(lua_State *L);
-
-	// set_velocity(self, vel)
-	static int l_set_velocity(lua_State *L);
-
-	// get_yaw(self)
-	static int l_get_yaw(lua_State *L);
-
-	// set_yaw(self, yaw)
-	static int l_set_yaw(lua_State *L);
-
-	// get_pitch(self)
-	static int l_get_pitch(lua_State *L);
-
-	// set_pitch(self,pitch)
-	static int l_set_pitch(lua_State *L);
 
 	// get_hp(self)
 	static int l_get_hp(lua_State *L);
@@ -59,14 +43,8 @@ private:
 	// get_wield_index(self)
 	static int l_get_wield_index(lua_State *L);
 
-	// set_wield_index(self)
-	static int l_set_wield_index(lua_State *L);
-
 	// get_wielded_item(self)
 	static int l_get_wielded_item(lua_State *L);
-
-	// get_hotbar_size(self)
-	static int l_get_hotbar_size(lua_State *L);
 
 	static int l_is_attached(lua_State *L);
 	static int l_is_touching_ground(lua_State *L);
@@ -76,7 +54,6 @@ private:
 	static int l_swimming_vertical(lua_State *L);
 
 	static int l_get_physics_override(lua_State *L);
-	static int l_set_physics_override(lua_State *L);
 
 	static int l_get_override_pos(lua_State *L);
 
@@ -93,9 +70,6 @@ private:
 
 	// get_pos(self)
 	static int l_get_pos(lua_State *L);
-
-	// set_pos(self, pos)
-	static int l_set_pos(lua_State *L);
 
 	// get_movement_acceleration(self)
 	static int l_get_movement_acceleration(lua_State *L);
@@ -122,8 +96,8 @@ private:
 
 	static int l_get_move_resistance(lua_State *L);
 
-	// get_object(self)
-	static int l_get_object(lua_State *L);
+	static LocalPlayer *getobject(LuaLocalPlayer *ref);
+	static LocalPlayer *getobject(lua_State *L, int narg);
 
 	LocalPlayer *m_localplayer = nullptr;
 
@@ -133,9 +107,7 @@ public:
 
 	static void create(lua_State *L, LocalPlayer *m);
 
-	static LuaLocalPlayer *checkobject(lua_State *L, int narg);
-	static LocalPlayer *getobject(LuaLocalPlayer *ref);
-	static LocalPlayer *getobject(lua_State *L, int narg);
-
 	static void Register(lua_State *L);
+
+	static const char className[];
 };

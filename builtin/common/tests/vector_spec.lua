@@ -1,4 +1,4 @@
-_G.vector = {metatable = {}}
+_G.vector = {}
 dofile("builtin/common/vector.lua")
 
 describe("vector", function()
@@ -461,5 +461,12 @@ describe("vector", function()
 			end
 		end
 
+	end)
+
+	it("in_area()", function()
+		assert.True(vector.in_area(vector.zero(), vector.new(-10, -10, -10), vector.new(10, 10, 10)))
+		assert.True(vector.in_area(vector.new(-2, 5, -8), vector.new(-10, -10, -10), vector.new(10, 10, 10)))
+		assert.True(vector.in_area(vector.new(-10, -10, -10), vector.new(-10, -10, -10), vector.new(10, 10, 10)))
+		assert.False(vector.in_area(vector.new(-10, -10, -10), vector.new(10, 10, 10), vector.new(-11, -10, -10)))
 	end)
 end)

@@ -41,9 +41,6 @@ namespace fs
  * Windows *
  ***********/
 
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0501
-#endif
 #include <windows.h>
 #include <shlwapi.h>
 #include <io.h>
@@ -125,6 +122,12 @@ bool IsDir(const std::string &path)
 	DWORD attr = GetFileAttributes(path.c_str());
 	return (attr != INVALID_FILE_ATTRIBUTES &&
 			(attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool IsExecutable(const std::string &path)
+{
+	DWORD type;
+	return GetBinaryType(path.c_str(), &type) != 0;
 }
 
 bool IsDirDelimiter(char c)
@@ -307,6 +310,11 @@ bool IsDir(const std::string &path)
 	if(stat(path.c_str(), &statbuf))
 		return false; // Actually error; but certainly not a directory
 	return ((statbuf.st_mode & S_IFDIR) == S_IFDIR);
+}
+
+bool IsExecutable(const std::string &path)
+{
+	return access(path.c_str(), X_OK) == 0;
 }
 
 bool IsDirDelimiter(char c)
@@ -639,7 +647,7 @@ std::string RemoveLastPathComponent(const std::string &path,
 		std::string *removed, int count)
 {
 	if(removed)
-		*removed = "";
+		removed->clear();
 
 	size_t remaining = path.size();
 
@@ -877,4 +885,3 @@ bool Rename(const std::string &from, const std::string &to)
 }
 
 } // namespace fs
-

@@ -26,6 +26,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "client/renderingengine.h"
 #include "client/sound.h"
 #include "client/tile.h"
+#include "client/mapblock_mesh.h"
 #include "util/basic_macros.h"
 #include "util/numeric.h"
 #include "util/serialize.h"
@@ -38,15 +39,12 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "map.h"
 #include "mesh.h"
 #include "nodedef.h"
-#include "serialization.h" // For decompressZlib
 #include "settings.h"
-#include "sound.h"
 #include "tool.h"
 #include "wieldmesh.h"
 #include <algorithm>
 #include <cmath>
 #include "client/shader.h"
-#include "script/scripting_client.h"
 #include "client/minimap.h"
 
 class Settings;
@@ -201,7 +199,7 @@ public:
 		return ACTIVEOBJECT_TYPE_TEST;
 	}
 
-	static ClientActiveObject* create(Client *client, ClientEnvironment *env);
+	static std::unique_ptr<ClientActiveObject> create(Client *client, ClientEnvironment *env);
 
 	void addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr);
 	void removeFromScene(bool permanent);
@@ -229,9 +227,9 @@ TestCAO::TestCAO(Client *client, ClientEnvironment *env):
 	ClientActiveObject::registerType(getType(), create);
 }
 
-ClientActiveObject* TestCAO::create(Client *client, ClientEnvironment *env)
+std::unique_ptr<ClientActiveObject> TestCAO::create(Client *client, ClientEnvironment *env)
 {
-	return new TestCAO(client, env);
+	return std::make_unique<TestCAO>(client, env);
 }
 
 void TestCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
@@ -254,11 +252,12 @@ void TestCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 	u16 indices[] = {0,1,2,2,3,0};
 	buf->append(vertices, 4, indices, 6);
 	// Set material
-	buf->getMaterial().setFlag(video::EMF_LIGHTING, true);	// false
-	buf->getMaterial().setFlag(video::EMF_BACK_FACE_CULLING, false);
-	buf->getMaterial().setTexture(0, tsrc->getTextureForMesh("rat.png"));
-	buf->getMaterial().setFlag(video::EMF_BILINEAR_FILTER, false);
-	buf->getMaterial().setFlag(video::EMF_FOG_ENABLE, true);
+	buf->getMaterial().Lighting = false;
+	buf->getMaterial().BackfaceCulling = false;
+	buf->getMaterial().TextureLayers[0].Texture = tsrc->getTextureForMesh("rat.png");
+	buf->getMaterial().TextureLayers[0].MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+	buf->getMaterial().TextureLayers[0].MagFilter = video::ETMAGF_NEAREST;
+	buf->getMaterial().FogEnable = true;
 	buf->getMaterial().MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL;
 	// Add to mesh
 	mesh->addMeshBuffer(buf);
@@ -327,7 +326,7 @@ void TestCAO::processMessage(const std::string &data)
 GenericCAO::GenericCAO(Client *client, ClientEnvironment *env):
 		ClientActiveObject(0, client, env)
 {
-	if (client == NULL) {
+	if (!client) {
 		ClientActiveObject::registerType(getType(), create);
 	} else {
 		m_client = client;
@@ -358,7 +357,6 @@ bool GenericCAO::collideWithObjects() const
 
 void GenericCAO::initialize(const std::string &data)
 {
-	infostream<<"GenericCAO: Got init data"<<std::endl;
 	processInitData(data);
 
 	m_enable_shaders = g_settings->getBool("enable_shaders");
@@ -394,8 +392,7 @@ void GenericCAO::processInitData(const std::string &data)
 	}
 
 	const u8 num_messages = readU8(is);
-
-	for (int i = 0; i < num_messages; i++) {
+	for (u8 i = 0; i < num_messages; i++) {
 		std::string message = deSerializeString32(is);
 		processMessage(message);
 	}
@@ -490,14 +487,11 @@ void GenericCAO::setAttachment(int parent_id, const std::string &bone,
 	ClientActiveObject *parent = m_env->getActiveObject(parent_id);
 
 	if (parent_id != old_parent) {
-		if (old_parent)
-			m_waiting_for_reattach = 10;
 		if (auto *o = m_env->getActiveObject(old_parent))
 			o->removeAttachmentChild(m_id);
 		if (parent)
 			parent->addAttachmentChild(m_id);
 	}
-
 	updateAttachments();
 
 	// Forcibly show attachments if required by set_attach
@@ -506,7 +500,7 @@ void GenericCAO::setAttachment(int parent_id, const std::string &bone,
 	} else if (!m_is_local_player) {
 		// Objects attached to the local player should be hidden in first person
 		m_is_visible = !m_attached_to_local ||
-			m_client->getCamera()->getCameraMode() != CAMERA_MODE_FIRST || g_settings->getBool("freecam");
+			m_client->getCamera()->getCameraMode() != CAMERA_MODE_FIRST;
 		m_force_visible = false;
 	} else {
 		// Local players need to have this set,
@@ -574,7 +568,8 @@ void GenericCAO::removeFromScene(bool permanent)
 	}
 
 	if (auto shadow = RenderingEngine::get_shadow_renderer())
-		shadow->removeNodeFromShadowList(getSceneNode());
+		if (auto node = getSceneNode())
+			shadow->removeNodeFromShadowList(node);
 
 	if (m_meshnode) {
 		m_meshnode->remove();
@@ -647,16 +642,22 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 		m_matrixnode->grab();
 	};
 
-	auto setSceneNodeMaterial = [this] (scene::ISceneNode *node) {
-		node->setMaterialFlag(video::EMF_LIGHTING, false);
-		node->setMaterialFlag(video::EMF_BILINEAR_FILTER, false);
-		node->setMaterialFlag(video::EMF_FOG_ENABLE, true);
-		node->setMaterialType(m_material_type);
-
+	auto setMaterial = [this] (video::SMaterial &mat) {
+		mat.MaterialType = m_material_type;
+		mat.Lighting = false;
+		mat.FogEnable = true;
 		if (m_enable_shaders) {
-			node->setMaterialFlag(video::EMF_GOURAUD_SHADING, false);
-			node->setMaterialFlag(video::EMF_NORMALIZE_NORMALS, true);
+			mat.GouraudShading = false;
+			mat.NormalizeNormals = true;
 		}
+		mat.forEachTexture([] (auto &tex) {
+			tex.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+			tex.MagFilter = video::ETMAGF_NEAREST;
+		});
+	};
+
+	auto setSceneNodeMaterials = [setMaterial] (scene::ISceneNode *node) {
+		node->forEachMaterial(setMaterial);
 	};
 
 	if (m_prop.visual == "sprite") {
@@ -664,10 +665,12 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 		m_spritenode = m_smgr->addBillboardSceneNode(
 				m_matrixnode, v2f(1, 1), v3f(0,0,0), -1);
 		m_spritenode->grab();
-		m_spritenode->setMaterialTexture(0,
-				tsrc->getTextureForMesh("no_texture.png"));
+		video::ITexture *tex = tsrc->getTextureForMesh("no_texture.png");
+		m_spritenode->forEachMaterial([tex] (auto &mat) {
+			mat.setTexture(0, tex);
+		});
 
-		setSceneNodeMaterial(m_spritenode);
+		setSceneNodeMaterials(m_spritenode);
 
 		m_spritenode->setSize(v2f(m_prop.visual_size.X,
 				m_prop.visual_size.Y) * BS);
@@ -699,16 +702,11 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 			}
 			u16 indices[] = {0,1,2,2,3,0};
 			buf->append(vertices, 4, indices, 6);
-			// Set material
-			buf->getMaterial().setFlag(video::EMF_LIGHTING, false);
-			buf->getMaterial().setFlag(video::EMF_BILINEAR_FILTER, false);
-			buf->getMaterial().setFlag(video::EMF_FOG_ENABLE, true);
-			buf->getMaterial().MaterialType = m_material_type;
 
+			// Set material
+			setMaterial(buf->getMaterial());
 			if (m_enable_shaders) {
 				buf->getMaterial().EmissiveColor = c;
-				buf->getMaterial().setFlag(video::EMF_GOURAUD_SHADING, false);
-				buf->getMaterial().setFlag(video::EMF_NORMALIZE_NORMALS, true);
 			}
 
 			// Add to mesh
@@ -730,16 +728,11 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 			}
 			u16 indices[] = {0,1,2,2,3,0};
 			buf->append(vertices, 4, indices, 6);
-			// Set material
-			buf->getMaterial().setFlag(video::EMF_LIGHTING, false);
-			buf->getMaterial().setFlag(video::EMF_BILINEAR_FILTER, false);
-			buf->getMaterial().setFlag(video::EMF_FOG_ENABLE, true);
-			buf->getMaterial().MaterialType = m_material_type;
 
+			// Set material
+			setMaterial(buf->getMaterial());
 			if (m_enable_shaders) {
 				buf->getMaterial().EmissiveColor = c;
-				buf->getMaterial().setFlag(video::EMF_GOURAUD_SHADING, false);
-				buf->getMaterial().setFlag(video::EMF_NORMALIZE_NORMALS, true);
 			}
 
 			// Add to mesh
@@ -757,10 +750,12 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 		mesh->drop();
 
 		m_meshnode->setScale(m_prop.visual_size);
-		m_meshnode->setMaterialFlag(video::EMF_BACK_FACE_CULLING,
-			m_prop.backface_culling);
 
-		setSceneNodeMaterial(m_meshnode);
+		setSceneNodeMaterials(m_meshnode);
+
+		m_meshnode->forEachMaterial([this] (auto &mat) {
+			mat.BackfaceCulling = m_prop.backface_culling;
+		});
 	} else if (m_prop.visual == "mesh") {
 		grabMatrixNode();
 		scene::IAnimatedMesh *mesh = m_client->getMesh(m_prop.mesh, true);
@@ -783,10 +778,11 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 
 			setAnimatedMeshColor(m_animated_meshnode, video::SColor(0xFFFFFFFF));
 
-			setSceneNodeMaterial(m_animated_meshnode);
+			setSceneNodeMaterials(m_animated_meshnode);
 
-			m_animated_meshnode->setMaterialFlag(video::EMF_BACK_FACE_CULLING,
-				m_prop.backface_culling);
+			m_animated_meshnode->forEachMaterial([this] (auto &mat) {
+				mat.BackfaceCulling = m_prop.backface_culling;
+			});
 		} else
 			errorstream<<"GenericCAO::addToScene(): Could not load mesh "<<m_prop.mesh<<std::endl;
 	} else if (m_prop.visual == "wielditem" || m_prop.visual == "item") {
@@ -846,31 +842,23 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 			oss << "GenericCAO::addToScene(): Model "
 				<< m_prop.mesh << " loaded with " << mat_count
 				<< " mesh buffers but only " << m_prop.textures.size()
-				<< " texture(s) specifed, this is deprecated.";
+				<< " texture(s) specified, this is deprecated.";
 			logOnce(oss, warningstream);
 
-			video::ITexture *last = m_animated_meshnode->getMaterial(0).TextureLayer[0].Texture;
+			video::ITexture *last = m_animated_meshnode->getMaterial(0).TextureLayers[0].Texture;
 			for (u32 i = 1; i < mat_count; i++) {
-				auto &layer = m_animated_meshnode->getMaterial(i).TextureLayer[0];
+				auto &layer = m_animated_meshnode->getMaterial(i).TextureLayers[0];
 				if (!layer.Texture)
 					layer.Texture = last;
 				last = layer.Texture;
 			}
 		}
 	}
-
-	if (m_client->modsLoaded() && m_client->getScript()->on_object_add(m_id)) {
-		removeFromScene(false);
-		return;
-	}
-
-	if (m_client->modsLoaded())
-		m_client->getScript()->on_object_properties_change(m_id);
 }
 
 void GenericCAO::updateLight(u32 day_night_ratio)
 {
-	if (m_glow < 0)
+	if (m_prop.glow < 0)
 		return;
 
 	u16 light_at_pos = 0;
@@ -883,8 +871,9 @@ void GenericCAO::updateLight(u32 day_night_ratio)
 		bool this_ok;
 		MapNode n = m_env->getMap().getNode(pos[i], &this_ok);
 		if (this_ok) {
-			u16 this_light = getInteriorLight(n, 0, m_client->ndef());
-			u8 this_light_intensity = MYMAX(this_light & 0xFF, (this_light >> 8) && 0xFF);
+			// Get light level at the position plus the entity glow
+			u16 this_light = getInteriorLight(n, m_prop.glow, m_client->ndef());
+			u8 this_light_intensity = MYMAX(this_light & 0xFF, this_light >> 8);
 			if (this_light_intensity > light_at_pos_intensity) {
 				light_at_pos = this_light;
 				light_at_pos_intensity = this_light_intensity;
@@ -895,12 +884,15 @@ void GenericCAO::updateLight(u32 day_night_ratio)
 	if (!pos_ok)
 		light_at_pos = LIGHT_SUN;
 
-	video::SColor light = encode_light(light_at_pos, m_glow);
-	if (!m_enable_shaders)
-		final_color_blend(&light, light_at_pos, day_night_ratio);
+	// Initialize with full alpha, otherwise entity won't be visible
+	video::SColor light{0xFFFFFFFF};
 
-	if (g_settings->getBool("fullbright"))
-		light = video::SColor(0xFFFFFFFF);
+	// Encode light into color, adding a small boost
+	// based on the entity glow.
+	if (m_enable_shaders)
+		light = encode_light(light_at_pos, m_prop.glow);
+	else
+		final_color_blend(&light, light_at_pos, day_night_ratio);
 
 	if (light != m_last_light) {
 		m_last_light = light;
@@ -978,8 +970,8 @@ void GenericCAO::updateMarker()
 
 void GenericCAO::updateNametag()
 {
-	//if (m_is_local_player && ! g_settings->getBool("freecam")) // No nametag for local player
-		//return;
+	if (m_is_local_player) // No nametag for local player
+		return;
 
 	if (m_prop.nametag.empty() || m_prop.nametag_color.getAlpha() == 0) {
 		// Delete nametag
@@ -1000,14 +992,13 @@ void GenericCAO::updateNametag()
 		// Add nametag
 		m_nametag = m_client->getCamera()->addNametag(node,
 			m_prop.nametag, m_prop.nametag_color,
-			m_prop.nametag_bgcolor, pos, nametag_images);
+			m_prop.nametag_bgcolor, pos);
 	} else {
 		// Update nametag
 		m_nametag->text = m_prop.nametag;
 		m_nametag->textcolor = m_prop.nametag_color;
 		m_nametag->bgcolor = m_prop.nametag_bgcolor;
 		m_nametag->pos = pos;
-		m_nametag->setImages(nametag_images);
 	}
 }
 
@@ -1035,15 +1026,13 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 	// Handle model animations and update positions instantly to prevent lags
 	if (m_is_local_player) {
 		LocalPlayer *player = m_env->getLocalPlayer();
-		m_position = player->getLegitPosition();
+		m_position = player->getPosition();
 		pos_translator.val_current = m_position;
-		if (! g_settings->getBool("freecam")) {
-			m_rotation.Y = wrapDegrees_0_360(player->getYaw());
-			rot_translator.val_current = m_rotation;
-		}
+		m_rotation.Y = wrapDegrees_0_360(player->getYaw());
+		rot_translator.val_current = m_rotation;
 
 		if (m_is_visible) {
-			int old_anim = player->last_animation;
+			LocalPlayerAnimation old_anim = player->last_animation;
 			float old_anim_speed = player->last_animation_speed;
 			m_velocity = v3f(0,0,0);
 			m_acceleration = v3f(0,0,0);
@@ -1051,7 +1040,7 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 			f32 new_speed = player->local_animation_speed;
 
 			bool walking = false;
-			if (controls.movement_speed > 0.001f && ! g_settings->getBool("freecam")) {
+			if (controls.movement_speed > 0.001f) {
 				new_speed *= controls.movement_speed;
 				walking = true;
 			}
@@ -1060,26 +1049,26 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 			bool allow_update = false;
 
 			// increase speed if using fast or flying fast
-			if(((g_settings->getBool("fast_move") &&
+			if((g_settings->getBool("fast_move") &&
 					m_client->checkLocalPrivilege("fast")) &&
 					(controls.aux1 ||
 					(!player->touching_ground &&
 					g_settings->getBool("free_move") &&
-					m_client->checkLocalPrivilege("fly")))) || g_settings->getBool("freecam"))
+					m_client->checkLocalPrivilege("fly"))))
 					new_speed *= 1.5;
 			// slowdown speed if sneaking
-			if (controls.sneak && walking && ! g_settings->getBool("no_slow"))
+			if (controls.sneak && walking)
 				new_speed /= 2;
 
 			if (walking && (controls.dig || controls.place)) {
 				new_anim = player->local_animations[3];
-				player->last_animation = WD_ANIM;
+				player->last_animation = LocalPlayerAnimation::WD_ANIM;
 			} else if (walking) {
 				new_anim = player->local_animations[1];
-				player->last_animation = WALK_ANIM;
+				player->last_animation = LocalPlayerAnimation::WALK_ANIM;
 			} else if (controls.dig || controls.place) {
 				new_anim = player->local_animations[2];
-				player->last_animation = DIG_ANIM;
+				player->last_animation = LocalPlayerAnimation::DIG_ANIM;
 			}
 
 			// Apply animations if input detected and not attached
@@ -1090,9 +1079,9 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 				m_animation_speed = new_speed;
 				player->last_animation_speed = m_animation_speed;
 			} else {
-				player->last_animation = NO_ANIM;
+				player->last_animation = LocalPlayerAnimation::NO_ANIM;
 
-				if (old_anim != NO_ANIM) {
+				if (old_anim != LocalPlayerAnimation::NO_ANIM) {
 					m_animation_range = player->local_animations[0];
 					updateAnimation();
 				}
@@ -1101,7 +1090,8 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 			// Update local player animations
 			if ((player->last_animation != old_anim ||
 					m_animation_speed != old_anim_speed) &&
-					player->last_animation != NO_ANIM && allow_update)
+					player->last_animation != LocalPlayerAnimation::NO_ANIM &&
+					allow_update)
 				updateAnimation();
 
 		}
@@ -1185,14 +1175,17 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 			m_step_distance_counter = 0.0f;
 			if (!m_is_local_player && m_prop.makes_footstep_sound) {
 				const NodeDefManager *ndef = m_client->ndef();
-				v3s16 p = floatToInt(getPosition() +
-					v3f(0.0f, (m_prop.collisionbox.MinEdge.Y - 0.5f) * BS, 0.0f), BS);
-				MapNode n = m_env->getMap().getNode(p);
-				SimpleSoundSpec spec = ndef->get(n).sound_footstep;
+				v3f foot_pos = getPosition() * (1.0f/BS)
+						+ v3f(0.0f, m_prop.collisionbox.MinEdge.Y, 0.0f);
+				v3s16 node_below_pos = floatToInt(foot_pos + v3f(0.0f, -0.5f, 0.0f),
+						1.0f);
+				MapNode n = m_env->getMap().getNode(node_below_pos);
+				SoundSpec spec = ndef->get(n).sound_footstep;
 				// Reduce footstep gain, as non-local-player footsteps are
 				// somehow louder.
 				spec.gain *= 0.6f;
-				m_client->sound()->playSoundAt(spec, false, getPosition());
+				// The footstep-sound doesn't travel with the object. => vel=0
+				m_client->sound()->playSoundAt(0, spec, foot_pos, v3f(0.0f));
 			}
 		}
 	}
@@ -1217,7 +1210,7 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 		}
 	}
 
-	if (!getParent() && node && fabs(m_prop.automatic_rotate) > 0.001f) {
+	if (node && fabs(m_prop.automatic_rotate) > 0.001f) {
 		// This is the child node's rotation. It is only used for automatic_rotate.
 		v3f local_rot = node->getRotation();
 		local_rot.Y = modulo360f(local_rot.Y - dtime * core::RADTODEG *
@@ -1337,13 +1330,6 @@ void GenericCAO::updateTextures(std::string mod)
 
 	m_previous_texture_modifier = m_current_texture_modifier;
 	m_current_texture_modifier = mod;
-	m_glow = m_prop.glow;
-
-	video::ITexture *shadow_texture = nullptr;
-	if (auto shadow = RenderingEngine::get_shadow_renderer())
-		shadow_texture = shadow->get_texture();
-
-	const u32 TEXTURE_LAYER_SHADOW = 3;
 
 	if (m_spritenode) {
 		if (m_prop.visual == "sprite") {
@@ -1351,24 +1337,25 @@ void GenericCAO::updateTextures(std::string mod)
 			if (!m_prop.textures.empty())
 				texturestring = m_prop.textures[0];
 			texturestring += mod;
-			m_spritenode->getMaterial(0).MaterialType = m_material_type;
-			m_spritenode->getMaterial(0).MaterialTypeParam = 0.5f;
-			m_spritenode->setMaterialTexture(0,
-					tsrc->getTextureForMesh(texturestring));
-			m_spritenode->setMaterialTexture(TEXTURE_LAYER_SHADOW, shadow_texture);
+
+			video::SMaterial &material = m_spritenode->getMaterial(0);
+			material.MaterialType = m_material_type;
+			material.MaterialTypeParam = 0.5f;
+			material.setTexture(0, tsrc->getTextureForMesh(texturestring));
 
 			// This allows setting per-material colors. However, until a real lighting
 			// system is added, the code below will have no effect. Once MineTest
 			// has directional lighting, it should work automatically.
 			if (!m_prop.colors.empty()) {
-				m_spritenode->getMaterial(0).AmbientColor = m_prop.colors[0];
-				m_spritenode->getMaterial(0).DiffuseColor = m_prop.colors[0];
-				m_spritenode->getMaterial(0).SpecularColor = m_prop.colors[0];
+				material.AmbientColor = m_prop.colors[0];
+				material.DiffuseColor = m_prop.colors[0];
+				material.SpecularColor = m_prop.colors[0];
 			}
 
-			m_spritenode->getMaterial(0).setFlag(video::EMF_TRILINEAR_FILTER, use_trilinear_filter);
-			m_spritenode->getMaterial(0).setFlag(video::EMF_BILINEAR_FILTER, use_bilinear_filter);
-			m_spritenode->getMaterial(0).setFlag(video::EMF_ANISOTROPIC_FILTER, use_anisotropic_filter);
+			material.forEachTexture([=] (auto &tex) {
+				setMaterialFilters(tex, use_bilinear_filter, use_trilinear_filter,
+						use_anisotropic_filter);
+			});
 		}
 	}
 
@@ -1380,45 +1367,35 @@ void GenericCAO::updateTextures(std::string mod)
 				if (texturestring.empty())
 					continue; // Empty texture string means don't modify that material
 				texturestring += mod;
-				video::ITexture* texture = tsrc->getTextureForMesh(texturestring);
+				video::ITexture *texture = tsrc->getTextureForMesh(texturestring);
 				if (!texture) {
 					errorstream<<"GenericCAO::updateTextures(): Could not load texture "<<texturestring<<std::endl;
 					continue;
 				}
 
 				// Set material flags and texture
-				video::SMaterial& material = m_animated_meshnode->getMaterial(i);
+				video::SMaterial &material = m_animated_meshnode->getMaterial(i);
 				material.MaterialType = m_material_type;
 				material.MaterialTypeParam = 0.5f;
-				material.TextureLayer[0].Texture = texture;
-				material.TextureLayer[TEXTURE_LAYER_SHADOW].Texture = shadow_texture;
-				material.setFlag(video::EMF_LIGHTING, true);
-				material.setFlag(video::EMF_BILINEAR_FILTER, false);
-				material.setFlag(video::EMF_BACK_FACE_CULLING, m_prop.backface_culling);
+				material.TextureLayers[0].Texture = texture;
+				material.Lighting = true;
+				material.BackfaceCulling = m_prop.backface_culling;
 
-				// don't filter low-res textures, makes them look blurry
-				// player models have a res of 64
-				const core::dimension2d<u32> &size = texture->getOriginalSize();
-				const u32 res = std::min(size.Height, size.Width);
-				use_trilinear_filter &= res > 64;
-				use_bilinear_filter &= res > 64;
-
-				m_animated_meshnode->getMaterial(i)
-						.setFlag(video::EMF_TRILINEAR_FILTER, use_trilinear_filter);
-				m_animated_meshnode->getMaterial(i)
-						.setFlag(video::EMF_BILINEAR_FILTER, use_bilinear_filter);
-				m_animated_meshnode->getMaterial(i)
-						.setFlag(video::EMF_ANISOTROPIC_FILTER, use_anisotropic_filter);
+				material.forEachTexture([=] (auto &tex) {
+					setMaterialFilters(tex, use_bilinear_filter, use_trilinear_filter,
+							use_anisotropic_filter);
+				});
 			}
 			for (u32 i = 0; i < m_prop.colors.size() &&
-			i < m_animated_meshnode->getMaterialCount(); ++i)
+					i < m_animated_meshnode->getMaterialCount(); ++i)
 			{
+				video::SMaterial &material = m_animated_meshnode->getMaterial(i);
 				// This allows setting per-material colors. However, until a real lighting
 				// system is added, the code below will have no effect. Once MineTest
 				// has directional lighting, it should work automatically.
-				m_animated_meshnode->getMaterial(i).AmbientColor = m_prop.colors[i];
-				m_animated_meshnode->getMaterial(i).DiffuseColor = m_prop.colors[i];
-				m_animated_meshnode->getMaterial(i).SpecularColor = m_prop.colors[i];
+				material.AmbientColor = m_prop.colors[i];
+				material.DiffuseColor = m_prop.colors[i];
+				material.SpecularColor = m_prop.colors[i];
 			}
 		}
 	}
@@ -1433,16 +1410,12 @@ void GenericCAO::updateTextures(std::string mod)
 					texturestring = m_prop.textures[i];
 				texturestring += mod;
 
-
 				// Set material flags and texture
-				video::SMaterial& material = m_meshnode->getMaterial(i);
+				video::SMaterial &material = m_meshnode->getMaterial(i);
 				material.MaterialType = m_material_type;
 				material.MaterialTypeParam = 0.5f;
-				material.setFlag(video::EMF_LIGHTING, false);
-				material.setFlag(video::EMF_BILINEAR_FILTER, false);
-				material.setTexture(0,
-						tsrc->getTextureForMesh(texturestring));
-				material.setTexture(TEXTURE_LAYER_SHADOW, shadow_texture);
+				material.Lighting = false;
+				material.setTexture(0, tsrc->getTextureForMesh(texturestring));
 				material.getTextureMatrix(0).makeIdentity();
 
 				// This allows setting per-material colors. However, until a real lighting
@@ -1450,14 +1423,15 @@ void GenericCAO::updateTextures(std::string mod)
 				// has directional lighting, it should work automatically.
 				if(m_prop.colors.size() > i)
 				{
-					m_meshnode->getMaterial(i).AmbientColor = m_prop.colors[i];
-					m_meshnode->getMaterial(i).DiffuseColor = m_prop.colors[i];
-					m_meshnode->getMaterial(i).SpecularColor = m_prop.colors[i];
+					material.AmbientColor = m_prop.colors[i];
+					material.DiffuseColor = m_prop.colors[i];
+					material.SpecularColor = m_prop.colors[i];
 				}
 
-				m_meshnode->getMaterial(i).setFlag(video::EMF_TRILINEAR_FILTER, use_trilinear_filter);
-				m_meshnode->getMaterial(i).setFlag(video::EMF_BILINEAR_FILTER, use_bilinear_filter);
-				m_meshnode->getMaterial(i).setFlag(video::EMF_ANISOTROPIC_FILTER, use_anisotropic_filter);
+				material.forEachTexture([=] (auto &tex) {
+					setMaterialFilters(tex, use_bilinear_filter, use_trilinear_filter,
+							use_anisotropic_filter);
+				});
 			}
 		} else if (m_prop.visual == "upright_sprite") {
 			scene::IMesh *mesh = m_meshnode->getMesh();
@@ -1466,10 +1440,9 @@ void GenericCAO::updateTextures(std::string mod)
 				if (!m_prop.textures.empty())
 					tname = m_prop.textures[0];
 				tname += mod;
-				auto& material = m_meshnode->getMaterial(0);
-				material.setTexture(0,
-						tsrc->getTextureForMesh(tname));
-				material.setTexture(TEXTURE_LAYER_SHADOW, shadow_texture);
+
+				auto &material = m_meshnode->getMaterial(0);
+				material.setTexture(0, tsrc->getTextureForMesh(tname));
 
 				// This allows setting per-material colors. However, until a real lighting
 				// system is added, the code below will have no effect. Once MineTest
@@ -1480,9 +1453,10 @@ void GenericCAO::updateTextures(std::string mod)
 					material.SpecularColor = m_prop.colors[0];
 				}
 
-				material.setFlag(video::EMF_TRILINEAR_FILTER, use_trilinear_filter);
-				material.setFlag(video::EMF_BILINEAR_FILTER, use_bilinear_filter);
-				material.setFlag(video::EMF_ANISOTROPIC_FILTER, use_anisotropic_filter);
+				material.forEachTexture([=] (auto &tex) {
+					setMaterialFilters(tex, use_bilinear_filter, use_trilinear_filter,
+							use_anisotropic_filter);
+				});
 			}
 			{
 				std::string tname = "no_texture.png";
@@ -1491,10 +1465,9 @@ void GenericCAO::updateTextures(std::string mod)
 				else if (!m_prop.textures.empty())
 					tname = m_prop.textures[0];
 				tname += mod;
-				auto& material = m_meshnode->getMaterial(1);
-				material.setTexture(0,
-						tsrc->getTextureForMesh(tname));
-				material.setTexture(TEXTURE_LAYER_SHADOW, shadow_texture);
+
+				auto &material = m_meshnode->getMaterial(1);
+				material.setTexture(0, tsrc->getTextureForMesh(tname));
 
 				// This allows setting per-material colors. However, until a real lighting
 				// system is added, the code below will have no effect. Once MineTest
@@ -1509,12 +1482,13 @@ void GenericCAO::updateTextures(std::string mod)
 					material.SpecularColor = m_prop.colors[0];
 				}
 
-				material.setFlag(video::EMF_TRILINEAR_FILTER, use_trilinear_filter);
-				material.setFlag(video::EMF_BILINEAR_FILTER, use_bilinear_filter);
-				material.setFlag(video::EMF_ANISOTROPIC_FILTER, use_anisotropic_filter);
+				material.forEachTexture([=] (auto &tex) {
+					setMaterialFilters(tex, use_bilinear_filter, use_trilinear_filter,
+							use_anisotropic_filter);
+				});
 			}
 			// Set mesh color (only if lighting is disabled)
-			if (!m_prop.colors.empty() && m_glow < 0)
+			if (!m_prop.colors.empty() && m_prop.glow < 0)
 				setMeshColor(mesh, m_prop.colors[0]);
 		}
 	}
@@ -1679,57 +1653,6 @@ bool GenericCAO::visualExpiryRequired(const ObjectProperties &new_) const
 		(uses_legacy_texture && old.textures != new_.textures);
 }
 
-void GenericCAO::setProperties(ObjectProperties newprops)
-{
-	// Check what exactly changed
-	bool expire_visuals = visualExpiryRequired(newprops);
-	bool textures_changed = m_prop.textures != newprops.textures;
-
-	// Apply changes
-	m_prop = std::move(newprops);
-
-	m_selection_box = m_prop.selectionbox;
-	m_selection_box.MinEdge *= BS;
-	m_selection_box.MaxEdge *= BS;
-
-	m_tx_size.X = 1.0f / m_prop.spritediv.X;
-	m_tx_size.Y = 1.0f / m_prop.spritediv.Y;
-
-	if(!m_initial_tx_basepos_set){
-		m_initial_tx_basepos_set = true;
-		m_tx_basepos = m_prop.initial_sprite_basepos;
-	}
-	if (m_is_local_player) {
-		LocalPlayer *player = m_env->getLocalPlayer();
-		player->makes_footstep_sound = m_prop.makes_footstep_sound;
-		aabb3f collision_box = m_prop.collisionbox;
-		collision_box.MinEdge *= BS;
-		collision_box.MaxEdge *= BS;
-		player->setCollisionbox(collision_box);
-		player->setEyeHeight(m_prop.eye_height);
-		player->setZoomFOV(m_prop.zoom_fov);
-	}
-
-	if ((m_is_player && !m_is_local_player) && m_prop.nametag.empty())
-		m_prop.nametag = m_name;
-	if (m_is_local_player)
-		m_prop.show_on_minimap = false;
-
-	if (expire_visuals) {
-		expireVisuals();
-	} else {
-		infostream << "GenericCAO: properties updated but expiring visuals"
-			<< " not necessary" << std::endl;
-		if (textures_changed) {
-			// don't update while punch texture modifier is active
-			if (m_reset_textures_timer < 0)
-				updateTextures(m_current_texture_modifier);
-		}
-		updateNametag();
-		updateMarker();
-	}
-}
-
 void GenericCAO::processMessage(const std::string &data)
 {
 	//infostream<<"GenericCAO: Got message"<<std::endl;
@@ -1741,12 +1664,52 @@ void GenericCAO::processMessage(const std::string &data)
 		newprops.show_on_minimap = m_is_player; // default
 
 		newprops.deSerialize(is);
-		setProperties(newprops);
 
-		// notify CSM
-		if (m_client->modsLoaded())
-			m_client->getScript()->on_object_properties_change(m_id);
+		// Check what exactly changed
+		bool expire_visuals = visualExpiryRequired(newprops);
+		bool textures_changed = m_prop.textures != newprops.textures;
 
+		// Apply changes
+		m_prop = std::move(newprops);
+
+		m_selection_box = m_prop.selectionbox;
+		m_selection_box.MinEdge *= BS;
+		m_selection_box.MaxEdge *= BS;
+
+		m_tx_size.X = 1.0f / m_prop.spritediv.X;
+		m_tx_size.Y = 1.0f / m_prop.spritediv.Y;
+
+		if(!m_initial_tx_basepos_set){
+			m_initial_tx_basepos_set = true;
+			m_tx_basepos = m_prop.initial_sprite_basepos;
+		}
+		if (m_is_local_player) {
+			LocalPlayer *player = m_env->getLocalPlayer();
+			player->makes_footstep_sound = m_prop.makes_footstep_sound;
+			aabb3f collision_box = m_prop.collisionbox;
+			collision_box.MinEdge *= BS;
+			collision_box.MaxEdge *= BS;
+			player->setCollisionbox(collision_box);
+			player->setEyeHeight(m_prop.eye_height);
+			player->setZoomFOV(m_prop.zoom_fov);
+		}
+
+		if ((m_is_player && !m_is_local_player) && m_prop.nametag.empty())
+			m_prop.nametag = m_name;
+		if (m_is_local_player)
+			m_prop.show_on_minimap = false;
+
+		if (expire_visuals) {
+			expireVisuals();
+		} else {
+			if (textures_changed) {
+				// don't update while punch texture modifier is active
+				if (m_reset_textures_timer < 0)
+					updateTextures(m_current_texture_modifier);
+			}
+			updateNametag();
+			updateMarker();
+		}
 	} else if (cmd == AO_CMD_UPDATE_POSITION) {
 		// Not sent by the server if this object is an attachment.
 		// We might however get here if the server notices the object being detached before the client.
@@ -1780,7 +1743,7 @@ void GenericCAO::processMessage(const std::string &data)
 	} else if (cmd == AO_CMD_SET_TEXTURE_MOD) {
 		std::string mod = deSerializeString16(is);
 
-		// immediately reset a engine issued texture modifier if a mod sends a different one
+		// immediately reset an engine issued texture modifier if a mod sends a different one
 		if (m_reset_textures_timer > 0) {
 			m_reset_textures_timer = -1;
 			updateTextures(m_previous_texture_modifier);
@@ -1803,26 +1766,44 @@ void GenericCAO::processMessage(const std::string &data)
 		float override_speed = readF32(is);
 		float override_jump = readF32(is);
 		float override_gravity = readF32(is);
-		// these are sent inverted so we get true when the server sends nothing
+		// MT 0.4.10 legacy: send inverted for detault `true` if the server sends nothing
 		bool sneak = !readU8(is);
 		bool sneak_glitch = !readU8(is);
 		bool new_move = !readU8(is);
 
+		float override_speed_climb = readF32(is);
+		float override_speed_crouch = readF32(is);
+		float override_liquid_fluidity = readF32(is);
+		float override_liquid_fluidity_smooth = readF32(is);
+		float override_liquid_sink = readF32(is);
+		float override_acceleration_default = readF32(is);
+		float override_acceleration_air = readF32(is);
+		// fallback for new overrides (since 5.8.0)
+		if (is.eof()) {
+			override_speed_climb = 1.0f;
+			override_speed_crouch = 1.0f;
+			override_liquid_fluidity = 1.0f;
+			override_liquid_fluidity_smooth = 1.0f;
+			override_liquid_sink = 1.0f;
+			override_acceleration_default = 1.0f;
+			override_acceleration_air = 1.0f;
+		}
 
-		if(m_is_local_player)
-		{
-			Client *client = m_env->getGameDef();
-
-			if (client->modsLoaded() && client->getScript()->on_recieve_physics_override(override_speed, override_jump, override_gravity, sneak, sneak_glitch, new_move))
-				return;
-
-			LocalPlayer *player = m_env->getLocalPlayer();
-			player->physics_override_speed = override_speed;
-			player->physics_override_jump = override_jump;
-			player->physics_override_gravity = override_gravity;
-			player->physics_override_sneak = sneak;
-			player->physics_override_sneak_glitch = sneak_glitch;
-			player->physics_override_new_move = new_move;
+		if (m_is_local_player) {
+			auto &phys = m_env->getLocalPlayer()->physics_override;
+			phys.speed = override_speed;
+			phys.jump = override_jump;
+			phys.gravity = override_gravity;
+			phys.sneak = sneak;
+			phys.sneak_glitch = sneak_glitch;
+			phys.new_move = new_move;
+			phys.speed_climb = override_speed_climb;
+			phys.speed_crouch = override_speed_crouch;
+			phys.liquid_fluidity = override_liquid_fluidity;
+			phys.liquid_fluidity_smooth = override_liquid_fluidity_smooth;
+			phys.liquid_sink = override_liquid_sink;
+			phys.acceleration_default = override_acceleration_default;
+			phys.acceleration_air = override_acceleration_air;
 		}
 	} else if (cmd == AO_CMD_SET_ANIMATION) {
 		// TODO: change frames send as v2s32 value
@@ -1836,7 +1817,7 @@ void GenericCAO::processMessage(const std::string &data)
 			updateAnimation();
 		} else {
 			LocalPlayer *player = m_env->getLocalPlayer();
-			if(player->last_animation == NO_ANIM)
+			if(player->last_animation == LocalPlayerAnimation::NO_ANIM)
 			{
 				m_animation_range = v2s32((s32)range.X, (s32)range.Y);
 				m_animation_speed = readF32(is);
@@ -1914,9 +1895,6 @@ void GenericCAO::processMessage(const std::string &data)
 			// Same as 'ObjectRef::l_remove'
 			if (!m_is_player)
 				clearChildAttachments();
-		} else {
-			if (m_client->modsLoaded())
-				m_client->getScript()->on_object_hp_change(m_id);
 		}
 	} else if (cmd == AO_CMD_UPDATE_ARMOR_GROUPS) {
 		m_armor_groups.clear();
@@ -2003,7 +1981,7 @@ void GenericCAO::updateMeshCulling()
 	if (!m_is_local_player)
 		return;
 
-	const bool hidden = m_client->getCamera()->getCameraMode() == CAMERA_MODE_FIRST && ! g_settings->getBool("freecam");
+	const bool hidden = m_client->getCamera()->getCameraMode() == CAMERA_MODE_FIRST;
 
 	scene::ISceneNode *node = getSceneNode();
 
@@ -2012,7 +1990,9 @@ void GenericCAO::updateMeshCulling()
 
 	if (m_prop.visual == "upright_sprite") {
 		// upright sprite has no backface culling
-		node->setMaterialFlag(video::EMF_FRONT_FACE_CULLING, hidden);
+		node->forEachMaterial([=] (auto &mat) {
+			mat.FrontfaceCulling = hidden;
+		});
 		return;
 	}
 
@@ -2020,16 +2000,16 @@ void GenericCAO::updateMeshCulling()
 		// Hide the mesh by culling both front and
 		// back faces. Serious hackyness but it works for our
 		// purposes. This also preserves the skeletal armature.
-		node->setMaterialFlag(video::EMF_BACK_FACE_CULLING,
-			true);
-		node->setMaterialFlag(video::EMF_FRONT_FACE_CULLING,
-			true);
+		node->forEachMaterial([] (auto &mat) {
+			mat.BackfaceCulling = true;
+			mat.FrontfaceCulling = true;
+		});
 	} else {
 		// Restore mesh visibility.
-		node->setMaterialFlag(video::EMF_BACK_FACE_CULLING,
-			m_prop.backface_culling);
-		node->setMaterialFlag(video::EMF_FRONT_FACE_CULLING,
-			false);
+		node->forEachMaterial([this] (auto &mat) {
+			mat.BackfaceCulling = m_prop.backface_culling;
+			mat.FrontfaceCulling = false;
+		});
 	}
 }
 

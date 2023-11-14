@@ -20,6 +20,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irrlichttypes.h" // must be included before anything irrlicht, see comment in the file
 #include "irrlicht.h" // createDevice
 #include "irrlichttypes_extrabloated.h"
+#include "irrlicht_changes/printing.h"
 #include "benchmark/benchmark.h"
 #include "chat_interface.h"
 #include "debug.h"
@@ -27,9 +28,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "server.h"
 #include "filesys.h"
 #include "version.h"
-#ifndef SERVER
 #include "client/game.h"
-#endif
 #include "defaultsettings.h"
 #include "gettext.h"
 #include "log.h"
@@ -79,12 +78,18 @@ extern "C" {
 #define DEBUGFILE "debug.txt"
 #define DEFAULT_SERVER_PORT 30000
 
+#define ENV_MT_LOGCOLOR "MT_LOGCOLOR"
+#define ENV_NO_COLOR "NO_COLOR"
+#define ENV_CLICOLOR "CLICOLOR"
+#define ENV_CLICOLOR_FORCE "CLICOLOR_FORCE"
+
 typedef std::map<std::string, ValueSpec> OptionList;
 
 /**********************************************************************
  * Private functions
  **********************************************************************/
 
+static void get_env_opts(Settings &args);
 static bool get_cmdline_opts(int argc, char *argv[], Settings *cmd_args);
 static void set_allowed_options(OptionList *allowed_options);
 
@@ -99,6 +104,7 @@ static void list_game_ids();
 static void list_worlds(bool print_name, bool print_path);
 static bool setup_log_params(const Settings &cmd_args);
 static bool create_userdata_path();
+static bool use_debugger(int argc, char *argv[]);
 static bool init_common(const Settings &cmd_args, int argc, char *argv[]);
 static void uninit_common();
 static void startup_message();
@@ -120,7 +126,7 @@ static bool determine_subgame(GameParams *game_params);
 
 static bool run_dedicated_server(const GameParams &game_params, const Settings &cmd_args);
 static bool migrate_map_database(const GameParams &game_params, const Settings &cmd_args);
-static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args, const Address &addr);
+static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args);
 
 /**********************************************************************/
 
@@ -138,6 +144,7 @@ int main(int argc, char *argv[])
 	g_logger.addOutputMaxLevel(&stderr_output, LL_ACTION);
 
 	Settings cmd_args;
+	get_env_opts(cmd_args);
 	bool cmd_args_ok = get_cmdline_opts(argc, argv, &cmd_args);
 	if (!cmd_args_ok
 			|| cmd_args.getFlag("help")
@@ -157,6 +164,11 @@ int main(int argc, char *argv[])
 
 	if (!setup_log_params(cmd_args))
 		return 1;
+
+	if (cmd_args.getFlag("debugger")) {
+		if (!use_debugger(argc, argv))
+			warningstream << "Continuing without debugger" << std::endl;
+	}
 
 	porting::signal_handler_init();
 
@@ -207,7 +219,10 @@ int main(int argc, char *argv[])
 	// Run unit tests
 	if (cmd_args.getFlag("run-unittests")) {
 #if BUILD_UNITTESTS
-		return run_tests();
+		if (cmd_args.exists("test-module"))
+			return run_tests(cmd_args.get("test-module")) ? 0 : 1;
+		else
+			return run_tests() ? 0 : 1;
 #else
 		errorstream << "Unittest support is not enabled in this binary. "
 			<< "If you want to enable it, compile project with BUILD_UNITTESTS=1 flag."
@@ -271,6 +286,36 @@ int main(int argc, char *argv[])
  *****************************************************************************/
 
 
+static void get_env_opts(Settings &args)
+{
+#if !defined(_WIN32)
+	const char *mt_logcolor = std::getenv(ENV_MT_LOGCOLOR);
+	if (mt_logcolor) {
+		args.set("color", mt_logcolor);
+	}
+#endif
+
+	// CLICOLOR is a de-facto standard option for colors <https://bixense.com/clicolors/>
+	// CLICOLOR != 0: ANSI colors are supported (auto-detection, this is the default)
+	// CLICOLOR == 0: ANSI colors are NOT supported
+	const char *clicolor = std::getenv(ENV_CLICOLOR);
+	if (clicolor && std::string(clicolor) == "0") {
+		args.set("color", "never");
+	}
+	// NO_COLOR only specifies that no color is allowed.
+	// Implemented according to <http://no-color.org/>
+	const char *no_color = std::getenv(ENV_NO_COLOR);
+	if (no_color && no_color[0]) {
+		args.set("color", "never");
+	}
+	// CLICOLOR_FORCE is another option, which should turn on colors "no matter what".
+	const char *clicolor_force = std::getenv(ENV_CLICOLOR_FORCE);
+	if (clicolor_force && std::string(clicolor_force) != "0") {
+		// should ALWAYS have colors, so we ignore tty (no "auto")
+		args.set("color", "always");
+	}
+}
+
 static bool get_cmdline_opts(int argc, char *argv[], Settings *cmd_args)
 {
 	set_allowed_options(&allowed_options);
@@ -294,6 +339,8 @@ static void set_allowed_options(OptionList *allowed_options)
 			_("Run the unit tests and exit"))));
 	allowed_options->insert(std::make_pair("run-benchmarks", ValueSpec(VALUETYPE_FLAG,
 			_("Run the benchmarks and exit"))));
+	allowed_options->insert(std::make_pair("test-module", ValueSpec(VALUETYPE_STRING,
+			_("Only run the specified test module"))));
 	allowed_options->insert(std::make_pair("map-dir", ValueSpec(VALUETYPE_STRING,
 			_("Same as --world (deprecated)"))));
 	allowed_options->insert(std::make_pair("world", ValueSpec(VALUETYPE_STRING,
@@ -314,6 +361,8 @@ static void set_allowed_options(OptionList *allowed_options)
 			_("Print even more information to console"))));
 	allowed_options->insert(std::make_pair("trace", ValueSpec(VALUETYPE_FLAG,
 			_("Print enormous amounts of information to log and console"))));
+	allowed_options->insert(std::make_pair("debugger", ValueSpec(VALUETYPE_FLAG,
+			_("Try to automatically attach a debugger before starting (convenience option)"))));
 	allowed_options->insert(std::make_pair("logfile", ValueSpec(VALUETYPE_STRING,
 			_("Set logfile path ('' = no logging)"))));
 	allowed_options->insert(std::make_pair("gameid", ValueSpec(VALUETYPE_STRING,
@@ -362,12 +411,14 @@ static void print_help(const OptionList &allowed_options)
 static void print_allowed_options(const OptionList &allowed_options)
 {
 	for (const auto &allowed_option : allowed_options) {
-		std::ostringstream os1(std::ios::binary);
-		os1 << "  --" << allowed_option.first;
+		std::string opt = "  --" + allowed_option.first;
 		if (allowed_option.second.type != VALUETYPE_FLAG)
-			os1 << _(" <value>");
+			opt += _(" <value>");
 
-		std::cout << padStringRight(os1.str(), 30);
+		std::string opt_padded = padStringRight(opt, 30);
+		std::cout << opt_padded;
+		if (opt == opt_padded) // Line is too long to pad
+			std::cout << std::endl << padStringRight("", 30);
 
 		if (allowed_option.second.help)
 			std::cout << allowed_option.second.help;
@@ -450,14 +501,8 @@ static bool setup_log_params(const Settings &cmd_args)
 	std::string color_mode;
 	if (cmd_args.exists("color")) {
 		color_mode = cmd_args.get("color");
-#if !defined(_WIN32)
-	} else {
-		char *color_mode_env = getenv("MT_LOGCOLOR");
-		if (color_mode_env)
-			color_mode = color_mode_env;
-#endif
 	}
-	if (color_mode != "") {
+	if (!color_mode.empty()) {
 		if (color_mode == "auto") {
 			Logger::color_mode = LOG_COLOR_AUTO;
 		} else if (color_mode == "always") {
@@ -500,10 +545,130 @@ static bool create_userdata_path()
 	}
 #else
 	// Create user data directory
-	success = fs::CreateDir(porting::path_user);
+	success = fs::CreateAllDirs(porting::path_user);
 #endif
 
 	return success;
+}
+
+namespace {
+	[[maybe_unused]] std::string findProgram(const char *name) {
+		char *path_c = getenv("PATH");
+		if (!path_c)
+			return "";
+		std::istringstream iss(path_c);
+		std::string checkpath;
+		while (!iss.eof()) {
+			std::getline(iss, checkpath, PATH_DELIM[0]);
+			if (!checkpath.empty() && checkpath.back() != DIR_DELIM_CHAR)
+				checkpath.push_back(DIR_DELIM_CHAR);
+			checkpath.append(name);
+			if (fs::IsExecutable(checkpath))
+				return checkpath;
+		}
+		return "";
+	}
+
+#ifdef _WIN32
+	const char *debuggerNames[] = {"gdb.exe", "lldb.exe"};
+#else
+	[[maybe_unused]] const char *debuggerNames[] = {"gdb", "lldb"};
+#endif
+
+	template <class T>
+	void getDebuggerArgs(T &out, int i) {
+		if (i == 0) {
+			for (auto s : {"-q", "--batch", "-iex", "set confirm off",
+				"-ex", "run", "-ex", "bt", "--args"})
+				out.push_back(s);
+		} else if (i == 1) {
+			for (auto s : {"-Q", "-b", "-o", "run", "-k", "bt\nq", "--"})
+				out.push_back(s);
+		}
+	}
+}
+
+static bool use_debugger(int argc, char *argv[])
+{
+#if defined(__ANDROID__)
+	return false;
+#else
+#ifdef _WIN32
+	if (IsDebuggerPresent()) {
+		warningstream << "Process is already being debugged." << std::endl;
+		return false;
+	}
+#endif
+
+	char exec_path[1024];
+	if (!porting::getCurrentExecPath(exec_path, sizeof(exec_path)))
+		return false;
+
+	int debugger = -1;
+	std::string debugger_path;
+	for (u32 i = 0; i < ARRLEN(debuggerNames); i++) {
+		debugger_path = findProgram(debuggerNames[i]);
+		if (!debugger_path.empty()) {
+			debugger = i;
+			break;
+		}
+	}
+	if (debugger == -1) {
+		warningstream << "Couldn't find a debugger to use. Try installing gdb or lldb." << std::endl;
+		return false;
+	}
+
+	// Try to be helpful
+#ifdef NDEBUG
+	if (strcmp(BUILD_TYPE, "RelWithDebInfo") != 0) {
+		warningstream << "It looks like your " PROJECT_NAME_C " executable was built without "
+			"debug symbols (BUILD_TYPE=" BUILD_TYPE "), so you won't get useful backtraces."
+			<< std::endl;
+	}
+#endif
+
+	std::vector<const char*> new_args;
+	new_args.push_back(debugger_path.c_str());
+	getDebuggerArgs(new_args, debugger);
+	// Copy the existing arguments
+	new_args.push_back(exec_path);
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--debugger"))
+			continue;
+		new_args.push_back(argv[i]);
+	}
+	new_args.push_back(nullptr);
+
+#ifdef _WIN32
+	// Special treatment for Windows
+	std::string cmdline;
+	for (int i = 1; new_args[i]; i++) {
+		if (i > 1)
+			cmdline += ' ';
+		cmdline += porting::QuoteArgv(new_args[i]);
+	}
+
+	STARTUPINFO startup_info = {};
+	PROCESS_INFORMATION process_info = {};
+	bool ok = CreateProcess(new_args[0], cmdline.empty() ? nullptr : &cmdline[0],
+		nullptr, nullptr, false, CREATE_UNICODE_ENVIRONMENT,
+		nullptr, nullptr, &startup_info, &process_info);
+	if (!ok) {
+		warningstream << "CreateProcess: " << GetLastError() << std::endl;
+		return false;
+	}
+	DWORD exitcode = 0;
+	WaitForSingleObject(process_info.hProcess, INFINITE);
+	GetExitCodeProcess(process_info.hProcess, &exitcode);
+	exit(exitcode);
+	// not reached
+#else
+	errno = 0;
+	execv(new_args[0], const_cast<char**>(new_args.data()));
+	warningstream << "execv: " << strerror(errno) << std::endl;
+	return false;
+#endif
+#endif
 }
 
 static bool init_common(const Settings &cmd_args, int argc, char *argv[])
@@ -550,16 +715,16 @@ static void uninit_common()
 
 static void startup_message()
 {
-	infostream << PROJECT_NAME << " " << _("with")
-	           << " SER_FMT_VER_HIGHEST_READ="
-               << (int)SER_FMT_VER_HIGHEST_READ << ", "
-               << g_build_info << std::endl;
+	infostream << PROJECT_NAME_C << " " << g_version_hash
+		<< "\nwith SER_FMT_VER_HIGHEST_READ="
+		<< (int)SER_FMT_VER_HIGHEST_READ << ", "
+		<< g_build_info << std::endl;
 }
 
 static bool read_config_file(const Settings &cmd_args)
 {
 	// Path of configuration file in use
-	sanity_check(g_settings_path == "");	// Sanity check
+	sanity_check(g_settings_path.empty());	// Sanity check
 
 	if (cmd_args.exists("config")) {
 		bool r = g_settings->readConfigFile(cmd_args.get("config").c_str());
@@ -766,7 +931,7 @@ static bool auto_select_world(GameParams *game_params)
 		           << world_path << "]" << std::endl;
 	}
 
-	assert(world_path != "");	// Post-condition
+	assert(!world_path.empty());	// Post-condition
 	game_params->world_path = world_path;
 	return true;
 }
@@ -822,7 +987,7 @@ static bool determine_subgame(GameParams *game_params)
 {
 	SubgameSpec gamespec;
 
-	assert(game_params->world_path != "");	// Pre-condition
+	assert(!game_params->world_path.empty());	// Pre-condition
 
 	// If world doesn't exist
 	if (!game_params->world_path.empty()
@@ -831,15 +996,15 @@ static bool determine_subgame(GameParams *game_params)
 		if (game_params->game_spec.isValid()) {
 			gamespec = game_params->game_spec;
 			infostream << "Using commanded gameid [" << gamespec.id << "]" << std::endl;
-		} else { // Otherwise we will be using "minetest"
-			gamespec = findSubgame(g_settings->get("default_game"));
-			infostream << "Using default gameid [" << gamespec.id << "]" << std::endl;
-			if (!gamespec.isValid()) {
-				errorstream << "Game specified in default_game ["
-				            << g_settings->get("default_game")
-				            << "] is invalid." << std::endl;
-				return false;
+		} else {
+			if (game_params->is_dedicated_server) {
+				// If this is a dedicated server and no gamespec has been specified,
+				// print a friendly error pointing to ContentDB.
+				errorstream << "To run a " PROJECT_NAME_C " server, you need to select a game using the '--gameid' argument." << std::endl
+				            << "Check out https://content.minetest.net for a selection of games to pick from and download." << std::endl;
 			}
+
+			return false;
 		}
 	} else { // World exists
 		std::string world_gameid = getWorldGameId(game_params->world_path, false);
@@ -880,27 +1045,6 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 	verbosestream << _("Using gameid") << " ["
 	              << game_params.game_spec.id << "]" << std::endl;
 
-	// Bind address
-	std::string bind_str = g_settings->get("bind_address");
-	Address bind_addr(0, 0, 0, 0, game_params.socket_port);
-
-	if (g_settings->getBool("ipv6_server")) {
-		bind_addr.setAddress((IPv6AddressBytes*) NULL);
-	}
-	try {
-		bind_addr.Resolve(bind_str.c_str());
-	} catch (ResolveError &e) {
-		infostream << "Resolving bind address \"" << bind_str
-		           << "\" failed: " << e.what()
-		           << " -- Listening on all addresses." << std::endl;
-	}
-	if (bind_addr.isIPv6() && !g_settings->getBool("enable_ipv6")) {
-		errorstream << "Unable to listen on "
-		            << bind_addr.serializeString()
-		            << L" because IPv6 is disabled" << std::endl;
-		return false;
-	}
-
 	// Database migration/compression
 	if (cmd_args.exists("migrate"))
 		return migrate_map_database(game_params, cmd_args);
@@ -915,7 +1059,27 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 		return Server::migrateModStorageDatabase(game_params, cmd_args);
 
 	if (cmd_args.getFlag("recompress"))
-		return recompress_map_database(game_params, cmd_args, bind_addr);
+		return recompress_map_database(game_params, cmd_args);
+
+	// Bind address
+	std::string bind_str = g_settings->get("bind_address");
+	Address bind_addr(0, 0, 0, 0, game_params.socket_port);
+
+	if (g_settings->getBool("ipv6_server"))
+		bind_addr.setAddress(static_cast<IPv6AddressBytes*>(nullptr));
+	try {
+		bind_addr.Resolve(bind_str.c_str());
+	} catch (const ResolveError &e) {
+		warningstream << "Resolving bind address \"" << bind_str
+			<< "\" failed: " << e.what()
+			<< " -- Listening on all addresses." << std::endl;
+	}
+	if (bind_addr.isIPv6() && !g_settings->getBool("enable_ipv6")) {
+		errorstream << "Unable to listen on "
+		            << bind_addr.serializeString()
+		            << " because IPv6 is disabled" << std::endl;
+		return false;
+	}
 
 	if (cmd_args.exists("terminal")) {
 #if USE_CURSES
@@ -1042,7 +1206,7 @@ static bool migrate_map_database(const GameParams &game_params, const Settings &
 		if (!data.empty()) {
 			new_db->saveBlock(*it, data);
 		} else {
-			errorstream << "Failed to load block " << PP(*it) << ", skipping it." << std::endl;
+			errorstream << "Failed to load block " << *it << ", skipping it." << std::endl;
 		}
 		if (++count % 0xFF == 0 && time(NULL) - last_update_time >= 1) {
 			std::cerr << " Migrated " << count << " blocks, "
@@ -1067,7 +1231,7 @@ static bool migrate_map_database(const GameParams &game_params, const Settings &
 	return true;
 }
 
-static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args, const Address &addr)
+static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args)
 {
 	Settings world_mt;
 	const std::string world_mt_path = game_params.world_path + DIR_DELIM + "world.mt";
@@ -1077,7 +1241,7 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 		return false;
 	}
 	const std::string &backend = world_mt.get("backend");
-	Server server(game_params.world_path, game_params.game_spec, false, addr, false);
+	Server server(game_params.world_path, game_params.game_spec, false, Address(), false);
 	MapDatabase *db = ServerMap::createDatabase(backend, game_params.world_path, world_mt);
 
 	u32 count = 0;
@@ -1097,21 +1261,23 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 		std::string data;
 		db->loadBlock(*it, &data);
 		if (data.empty()) {
-			errorstream << "Failed to load block " << PP(*it) << std::endl;
+			errorstream << "Failed to load block " << *it << std::endl;
 			return false;
 		}
 
 		iss.str(data);
 		iss.clear();
 
-		MapBlock mb(nullptr, v3s16(0,0,0), &server);
-		u8 ver = readU8(iss);
-		mb.deSerialize(iss, ver, true);
+		{
+			MapBlock mb(nullptr, v3s16(0,0,0), &server);
+			u8 ver = readU8(iss);
+			mb.deSerialize(iss, ver, true);
 
-		oss.str("");
-		oss.clear();
-		writeU8(oss, serialize_as_ver);
-		mb.serialize(oss, serialize_as_ver, true, -1);
+			oss.str("");
+			oss.clear();
+			writeU8(oss, serialize_as_ver);
+			mb.serialize(oss, serialize_as_ver, true, -1);
+		}
 
 		db->saveBlock(*it, oss.str());
 

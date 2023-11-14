@@ -20,20 +20,19 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 #pragma once
 
-#include "util/pointedthing.h"
 #include "cpp_api/s_base.h"
 #include "mapnode.h"
-#include "itemdef.h"
 #include "util/string.h"
 #include "util/pointedthing.h"
-#include "lua_api/l_item.h"
-#include "particles.h"
 
 #ifdef _CRT_MSVCP_CURRENT
 #include <cstdint>
 #endif
 
 class ClientEnvironment;
+struct ItemStack;
+class Inventory;
+struct ItemDefinition;
 
 class ScriptApiClient : virtual public ScriptApiBase
 {
@@ -58,22 +57,8 @@ public:
 	bool on_punchnode(v3s16 p, MapNode node);
 	bool on_placenode(const PointedThing &pointed, const ItemDefinition &item);
 	bool on_item_use(const ItemStack &item, const PointedThing &pointed);
-	bool on_recieve_physics_override(float override_speed, float override_jump,
-			float override_gravity, bool sneak, bool sneak_glitch,
-			bool new_move);
-	bool on_play_sound(SimpleSoundSpec spec);
-	bool on_spawn_particle(struct ParticleParameters param);
-	void on_object_properties_change(s16 id);
-	void on_object_hp_change(s16 id);
-	bool on_object_add(s16 id);
 
 	bool on_inventory_open(Inventory *inventory);
-	void open_enderchest();
-
-	v3f get_send_speed(v3f speed);
-
-	void set_node_def(const ContentFeatures &f);
-	void set_item_def(const ItemDefinition &i);
 
 	void setEnv(ClientEnvironment *env);
 };

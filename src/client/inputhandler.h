@@ -30,7 +30,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #endif
 
 class InputHandler;
-class TouchScreenGUI;
 
 /****************************************************************************
  Fast key cache for main game loop
@@ -125,6 +124,13 @@ public:
 			push_back(key);
 	}
 
+	void append(const KeyList &other)
+	{
+		for (const KeyPress &key : other) {
+			set(key);
+		}
+	}
+
 	bool operator[](const KeyPress &key) const { return find(key) != end(); }
 };
 
@@ -179,6 +185,12 @@ public:
 		mouse_wheel = 0;
 	}
 
+	void releaseAllKeys()
+	{
+		keyWasReleased.append(keyIsDown);
+		keyIsDown.clear();
+	}
+
 	void clearWasKeyPressed()
 	{
 		keyWasPressed.clear();
@@ -202,6 +214,7 @@ public:
 	TouchScreenGUI *m_touchscreengui;
 #endif
 
+private:
 	s32 mouse_wheel = 0;
 
 	// The current state of keys
@@ -241,8 +254,6 @@ public:
 	}
 
 	virtual bool isKeyDown(GameKeyType k) = 0;
-	virtual void setKeypress(const KeyPress &keyCode) = 0;
-	virtual void unsetKeypress(const KeyPress &keyCode) = 0;
 	virtual bool wasKeyDown(GameKeyType k) = 0;
 	virtual bool wasKeyPressed(GameKeyType k) = 0;
 	virtual bool wasKeyReleased(GameKeyType k) = 0;
@@ -265,6 +276,7 @@ public:
 	virtual void step(float dtime) {}
 
 	virtual void clear() {}
+	virtual void releaseAllKeys() {}
 
 	JoystickController joystick;
 	KeyCache keycache;
@@ -289,15 +301,6 @@ public:
 	virtual bool isKeyDown(GameKeyType k)
 	{
 		return m_receiver->IsKeyDown(keycache.key[k]) || joystick.isKeyDown(k);
-	}
-	virtual void setKeypress(const KeyPress &keyCode)
-	{
-		m_receiver->keyIsDown.set(keyCode);
-		m_receiver->keyWasDown.set(keyCode);
-	}
-	virtual void unsetKeypress(const KeyPress &keyCode)
-	{
-		m_receiver->keyIsDown.unset(keyCode);
 	}
 	virtual bool wasKeyDown(GameKeyType k)
 	{
@@ -329,7 +332,11 @@ public:
 				return 0.0f;
 			return 1.0f; // If there is a keyboard event, assume maximum speed
 		}
+#ifdef HAVE_TOUCHSCREENGUI
+		return m_receiver->m_touchscreengui->getMovementSpeed();
+#else
 		return joystick.getMovementSpeed();
+#endif
 	}
 
 	virtual float getMovementDirection()
@@ -349,7 +356,11 @@ public:
 		if (x != 0 || z != 0) /* If there is a keyboard event, it takes priority */
 			return atan2(x, z);
 		else
+#ifdef HAVE_TOUCHSCREENGUI
+			return m_receiver->m_touchscreengui->getMovementDirection();
+#else
 			return joystick.getMovementDirection();
+#endif
 	}
 
 	virtual bool cancelPressed()
@@ -406,6 +417,12 @@ public:
 		m_receiver->clearInput();
 	}
 
+	void releaseAllKeys()
+	{
+		joystick.releaseAllKeys();
+		m_receiver->releaseAllKeys();
+	}
+
 private:
 	MyEventReceiver *m_receiver = nullptr;
 	v2s32 m_mousepos;
@@ -422,14 +439,6 @@ public:
 	}
 
 	virtual bool isKeyDown(GameKeyType k) { return keydown[keycache.key[k]]; }
-	virtual void setKeypress(const KeyPress &keyCode)
-	{
-		keydown.set(keyCode);
-	}
-	virtual void unsetKeypress(const KeyPress &keyCode)
-	{
-		keydown.unset(keyCode);
-	}
 	virtual bool wasKeyDown(GameKeyType k) { return false; }
 	virtual bool wasKeyPressed(GameKeyType k) { return false; }
 	virtual bool wasKeyReleased(GameKeyType k) { return false; }

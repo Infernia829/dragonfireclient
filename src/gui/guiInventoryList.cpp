@@ -1,14 +1,17 @@
 /*
 Minetest
 Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU Lesser General Public License as published by
 the Free Software Foundation; either version 2.1 of the License, or
 (at your option) any later version.
+
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU Lesser General Public License for more details.
+
 You should have received a copy of the GNU Lesser General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
@@ -202,7 +205,7 @@ s32 GUIInventoryList::getItemIndexAtPos(v2s32 p) const
 			!AbsoluteClippingRect.isPointInside(p))
 		return -1;
 
-	// there can not be an item if the inventory or the inventorylist does not exist
+	// there cannot be an item if the inventory or the inventorylist does not exist
 	Inventory *inv = m_invmgr->getInventory(m_inventoryloc);
 	if (!inv)
 		return -1;
@@ -214,8 +217,8 @@ s32 GUIInventoryList::getItemIndexAtPos(v2s32 p) const
 	v2s32 base_pos = AbsoluteRect.UpperLeftCorner;
 
 	// instead of looping through each slot, we look where p would be in the grid
-	s32 i = (p.X - base_pos.X) / (s32)m_slot_spacing.X
-			+ m_geom.X * ((p.Y - base_pos.Y) / (s32)m_slot_spacing.Y);
+	s32 i = static_cast<s32>((p.X - base_pos.X) / m_slot_spacing.X)
+			+ static_cast<s32>((p.Y - base_pos.Y) / m_slot_spacing.Y) * m_geom.X;
 
 	v2s32 p0((i % m_geom.X) * m_slot_spacing.X,
 			(i / m_geom.X) * m_slot_spacing.Y);

@@ -27,8 +27,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "content/mods.h"
 #include "inventorymanager.h"
 #include "content/subgames.h"
-#include "tileanimation.h" // TileAnimationParams
-#include "particles.h" // ParticleParams
 #include "network/peerhandler.h"
 #include "network/address.h"
 #include "util/numeric.h"
@@ -38,6 +36,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "serverenvironment.h"
 #include "clientiface.h"
 #include "chatmessage.h"
+#include "sound.h"
 #include "translation.h"
 #include <string>
 #include <list>
@@ -63,7 +62,7 @@ struct RollbackAction;
 class EmergeManager;
 class ServerScripting;
 class ServerEnvironment;
-struct SimpleSoundSpec;
+struct SoundSpec;
 struct CloudParams;
 struct SkyboxParams;
 struct SunParams;
@@ -74,6 +73,8 @@ class ServerThread;
 class ServerModManager;
 class ServerInventoryManager;
 struct PackedValue;
+struct ParticleParameters;
+struct ParticleSpawnerParameters;
 
 enum ClientDeletionReason {
 	CDR_LEAVE,
@@ -96,30 +97,22 @@ struct MediaInfo
 	}
 };
 
-struct ServerSoundParams
+// Combines the pure sound (SoundSpec) with positional information
+struct ServerPlayingSound
 {
-	enum Type {
-		SSP_LOCAL,
-		SSP_POSITIONAL,
-		SSP_OBJECT
-	} type = SSP_LOCAL;
-	float gain = 1.0f;
-	float fade = 0.0f;
-	float pitch = 1.0f;
-	bool loop = false;
+	SoundLocation type = SoundLocation::Local;
+
+	float gain = 1.0f; // for amplification of the base sound
 	float max_hear_distance = 32 * BS;
 	v3f pos;
 	u16 object = 0;
-	std::string to_player = "";
-	std::string exclude_player = "";
+	std::string to_player;
+	std::string exclude_player;
 
 	v3f getPos(ServerEnvironment *env, bool *pos_exists) const;
-};
 
-struct ServerPlayingSound
-{
-	ServerSoundParams params;
-	SimpleSoundSpec spec;
+	SoundSpec spec;
+
 	std::unordered_set<session_t> clients; // peer ids
 };
 
@@ -157,7 +150,7 @@ public:
 		Address bind_addr,
 		bool dedicated,
 		ChatInterface *iface = nullptr,
-		std::string *on_shutdown_errmsg = nullptr
+		std::string *shutdown_errmsg = nullptr
 	);
 	~Server();
 	DISABLE_CLASS_COPY(Server);
@@ -165,7 +158,7 @@ public:
 	void start();
 	void stop();
 	// This is mainly a way to pass the time to the server.
-	// Actual processing is done in an another thread.
+	// Actual processing is done in another thread.
 	void step(float dtime);
 	// This is run by ServerThread and does the actual processing
 	void AsyncRunStep(bool initial_step=false);
@@ -203,6 +196,7 @@ public:
 	void handleCommand_SrpBytesA(NetworkPacket* pkt);
 	void handleCommand_SrpBytesM(NetworkPacket* pkt);
 	void handleCommand_HaveMedia(NetworkPacket *pkt);
+	void handleCommand_UpdateClientInfo(NetworkPacket *pkt);
 
 	void ProcessData(NetworkPacket *pkt);
 
@@ -236,8 +230,7 @@ public:
 
 	// Returns -1 if failed, sound handle on success
 	// Envlock
-	s32 playSound(const SimpleSoundSpec &spec, const ServerSoundParams &params,
-			bool ephemeral=false);
+	s32 playSound(ServerPlayingSound &params, bool ephemeral=false);
 	void stopSound(s32 handle);
 	void fadeSound(s32 handle, float step, float gain);
 
@@ -285,7 +278,7 @@ public:
 	virtual u16 allocateUnknownNodeId(const std::string &name);
 	IRollbackManager *getRollbackManager() { return m_rollback; }
 	virtual EmergeManager *getEmergeManager() { return m_emerge; }
-	virtual ModMetadataDatabase *getModStorageDatabase() { return m_mod_storage_database; }
+	virtual ModStorageDatabase *getModStorageDatabase() { return m_mod_storage_database; }
 
 	IWritableItemDefManager* getWritableItemDefManager();
 	NodeDefManager* getWritableNodeDefManager();
@@ -293,6 +286,7 @@ public:
 
 	virtual const std::vector<ModSpec> &getMods() const;
 	virtual const ModSpec* getModSpec(const std::string &modname) const;
+	virtual const SubgameSpec* getGameSpec() const { return &m_gamespec; }
 	static std::string getBuiltinLuaPath();
 	virtual std::string getWorldPath() const { return m_path_world; }
 
@@ -305,6 +299,9 @@ public:
 	{
 		setAsyncFatalError(std::string("Lua: ") + e.what());
 	}
+
+	// Not thread-safe.
+	void addShutdownError(const ModError &e);
 
 	bool showFormspec(const char *name, const std::string &formspec, const std::string &formname);
 	Map & getMap() { return m_env->getMap(); }
@@ -323,7 +320,7 @@ public:
 
 	void setLocalPlayerAnimations(RemotePlayer *player, v2s32 animation_frames[4],
 			f32 frame_speed);
-	void setPlayerEyeOffset(RemotePlayer *player, const v3f &first, const v3f &third);
+	void setPlayerEyeOffset(RemotePlayer *player, const v3f &first, const v3f &third, const v3f &third_front);
 
 	void setSky(RemotePlayer *player, const SkyboxParams &params);
 	void setSun(RemotePlayer *player, const SunParams &params);
@@ -349,11 +346,12 @@ public:
 	void DisconnectPeer(session_t peer_id);
 	bool getClientConInfo(session_t peer_id, con::rtt_stat_type type, float *retval);
 	bool getClientInfo(session_t peer_id, ClientInfo &ret);
+	const ClientDynamicInfo *getClientDynamicInfo(session_t peer_id);
 
 	void printToConsoleOnly(const std::string &text);
 
 	void HandlePlayerHPChange(PlayerSAO *sao, const PlayerHPChangeReason &reason);
-	void SendPlayerHP(PlayerSAO *sao);
+	void SendPlayerHP(PlayerSAO *sao, bool effect);
 	void SendPlayerBreath(PlayerSAO *sao);
 	void SendInventory(PlayerSAO *playerSAO, bool incremental);
 	void SendMovePlayer(session_t peer_id);
@@ -366,9 +364,6 @@ public:
 
 	void sendDetachedInventories(session_t peer_id, bool incremental);
 
-	virtual bool registerModStorage(ModMetadata *storage);
-	virtual void unregisterModStorage(const std::string &name);
-
 	bool joinModChannel(const std::string &channel);
 	bool leaveModChannel(const std::string &channel);
 	bool sendModChannelMessage(const std::string &channel, const std::string &message);
@@ -380,9 +375,9 @@ public:
 	// Get or load translations for a language
 	Translations *getTranslationLanguage(const std::string &lang_code);
 
-	static ModMetadataDatabase *openModStorageDatabase(const std::string &world_path);
+	static ModStorageDatabase *openModStorageDatabase(const std::string &world_path);
 
-	static ModMetadataDatabase *openModStorageDatabase(const std::string &backend,
+	static ModStorageDatabase *openModStorageDatabase(const std::string &backend,
 			const std::string &world_path, const Settings &world_mt);
 
 	static bool migrateModStorageDatabase(const GameParams &game_params,
@@ -391,8 +386,8 @@ public:
 	// Lua files registered for init of async env, pair of modname + path
 	std::vector<std::pair<std::string, std::string>> m_async_init_files;
 
-	// Data transferred into async envs at init time
-	std::unique_ptr<PackedValue> m_async_globals_data;
+	// Data transferred into other Lua envs at init time
+	std::unique_ptr<PackedValue> m_lua_globals_data;
 
 	// Bind address
 	Address m_bind_addr;
@@ -439,7 +434,7 @@ private:
 	void init();
 
 	void SendMovement(session_t peer_id);
-	void SendHP(session_t peer_id, u16 hp);
+	void SendHP(session_t peer_id, u16 hp, bool effect);
 	void SendBreath(session_t peer_id, u16 breath);
 	void SendAccessDenied(session_t peer_id, AccessDeniedCode reason,
 		const std::string &custom_reason, bool reconnect = false);
@@ -450,16 +445,13 @@ private:
 	void SendNodeDef(session_t peer_id, const NodeDefManager *nodedef,
 		u16 protocol_version);
 
-	/* mark blocks not sent for all clients */
-	void SetBlocksNotSent(std::map<v3s16, MapBlock *>& block);
-
 
 	virtual void SendChatMessage(session_t peer_id, const ChatMessage &message);
 	void SendTimeOfDay(session_t peer_id, u16 time, f32 time_speed);
 
 	void SendLocalPlayerAnimations(session_t peer_id, v2s32 animation_frames[4],
 		f32 animation_speed);
-	void SendEyeOffset(session_t peer_id, v3f first, v3f third);
+	void SendEyeOffset(session_t peer_id, v3f first, v3f third, v3f third_front);
 	void SendPlayerPrivileges(session_t peer_id);
 	void SendPlayerInventoryFormspec(session_t peer_id);
 	void SendPlayerFormspecPrepend(session_t peer_id);
@@ -491,6 +483,8 @@ private:
 	void sendAddNode(v3s16 p, MapNode n,
 			std::unordered_set<u16> *far_players = nullptr,
 			float far_d_nodes = 100, bool remove_metadata = true);
+	void sendNodeChangePkt(NetworkPacket &pkt, v3s16 block_pos,
+			v3f p, float far_d_nodes, std::unordered_set<u16> *far_players);
 
 	void sendMetadataChanged(const std::unordered_set<v3s16> &positions,
 			float far_d_nodes = 100);
@@ -664,9 +658,9 @@ private:
 	ChatInterface *m_admin_chat;
 	std::string m_admin_nick;
 
-	// if a mod-error occurs in the on_shutdown callback, the error message will
-	// be written into this
-	std::string *const m_on_shutdown_errmsg;
+	// If a mod error occurs while shutting down, the error message will be
+	// written into this.
+	std::string *const m_shutdown_errmsg;
 
 	/*
 		Map edit event queue. Automatically receives all map edits.
@@ -704,8 +698,7 @@ private:
 	s32 m_next_sound_id = 0; // positive values only
 	s32 nextSoundId();
 
-	std::unordered_map<std::string, ModMetadata *> m_mod_storages;
-	ModMetadataDatabase *m_mod_storage_database = nullptr;
+	ModStorageDatabase *m_mod_storage_database = nullptr;
 	float m_mod_storage_save_timer = 10.0f;
 
 	// CSM restrictions byteflag

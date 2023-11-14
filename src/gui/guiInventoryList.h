@@ -1,14 +1,17 @@
 /*
 Minetest
 Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU Lesser General Public License as published by
 the Free Software Foundation; either version 2.1 of the License, or
 (at your option) any later version.
+
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU Lesser General Public License for more details.
+
 You should have received a copy of the GNU Lesser General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
@@ -31,11 +34,19 @@ public:
 
 		ItemSpec(const InventoryLocation &a_inventoryloc,
 				const std::string &a_listname,
-				s32 a_i) :
+				s32 a_i,
+				const v2s32 slotsize) :
 			inventoryloc(a_inventoryloc),
 			listname(a_listname),
-			i(a_i)
+			i(a_i),
+			slotsize(slotsize)
 		{
+		}
+
+		bool operator==(const ItemSpec& other) const
+		{
+			return inventoryloc == other.inventoryloc &&
+					listname == other.listname && i == other.i;
 		}
 
 		bool isValid() const { return i != -1; }
@@ -43,6 +54,7 @@ public:
 		InventoryLocation inventoryloc;
 		std::string listname;
 		s32 i = -1;
+		v2s32 slotsize;
 	};
 
 	// options for inventorylists that are setable with the lua api
@@ -94,6 +106,11 @@ public:
 	{
 		m_options.slotborder = slotborder;
 		m_options.slotbordercolor = slotbordercolor;
+	}
+
+	const v2s32 getSlotSize() const noexcept
+	{
+		return m_slot_size;
 	}
 
 	// returns -1 if not item is at pos p
